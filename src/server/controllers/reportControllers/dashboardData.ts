@@ -55,6 +55,7 @@ export const dashboardData = authedProcedure
   .input(
     z.object({
       includeValuation: z.boolean().optional(),
+      location_id: z.string().uuid().optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -69,7 +70,7 @@ export const dashboardData = authedProcedure
     const includeValuation = input.includeValuation && isElevated;
 
     // Location-based access control: managers only see their location's data
-    const locationFilter = getLocationFilter(ctx.user!, ctx.userLocationId);
+    const locationFilter = getLocationFilter(ctx.user!, ctx.userLocationId, input.location_id);
     const stockLocationCond = locationFilter ? eq(Stock.location_id, locationFilter) : undefined;
     const poLocationCond = locationFilter ? eq(PurchaseOrder.destination_location_id, locationFilter) : undefined;
 

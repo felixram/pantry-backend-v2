@@ -1,0 +1,1 @@
+ALTER TABLE "purchase_order_audit" ADD COLUMN "createdAt" timestamp DEFAULT now() NOT NULL;

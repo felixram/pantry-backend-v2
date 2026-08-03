@@ -1,0 +1,1 @@
+ALTER TABLE "supplier" ALTER COLUMN "phone" DROP NOT NULL;

@@ -1,0 +1,2 @@
+ALTER TABLE "product" DROP CONSTRAINT "product_sku_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "product_sku_tenant_unique" ON "product" USING btree ("sku","tenant_id") WHERE "deletedAt" IS NULL;

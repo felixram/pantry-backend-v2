@@ -1,0 +1,1 @@
+ALTER TABLE "invoice_item" ADD COLUMN "extracted_discount_percent" real;

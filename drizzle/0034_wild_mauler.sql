@@ -1,0 +1,1 @@
+ALTER TABLE "product_unit_conversion" ADD COLUMN "is_purchasable" boolean DEFAULT true NOT NULL;

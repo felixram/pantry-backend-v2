@@ -1,0 +1,1 @@
+ALTER TABLE "inventory_count_entry" ADD COLUMN "unit" text;

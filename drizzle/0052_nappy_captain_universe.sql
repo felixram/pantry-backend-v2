@@ -1,0 +1,1 @@
+ALTER TABLE "supplier" ADD COLUMN "shipping_fee" real;

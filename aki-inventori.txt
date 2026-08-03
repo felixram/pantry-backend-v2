@@ -1,0 +1,62 @@
+1. Purpose
+Ventory is meant to speed up the inventory process by allowing to filter items from provider's catalogs allowing as well optimize the earnings.
+
+2. Scope
+
+- Save Products (by Provider)
+- Filter Products
+- Compare prices and give recommendations
+- Show constraints (delivery days, min. amount needed to get free shipping, etc...)
+- Create Group orders for deliveries and save them
+- Generate email Templates for each Provider.
+
+3. Functional requirements
+
+- users can create, update and delete accounts
+- users can create, update and delete (persistent) items
+- users can save items by provider, type and ref. code (SKU), par level (min. stock needed before reordering), price per unit, storage location, shelf life.
+- users can create providers and indicate delivery days, amount needed for free shipping, and indicate type of provider (primary, secondary, etc)
+- users can create Group orders
+- users can generate email templates for each provider.
+
+- user can see average cost/ last purchase cost
+- Historical Costs
+
+
+STACK ----
+
+
+FRONTEND:
+Vite
+React + typescript
+ShadCN + tailwindcss
+React Query (State management)
+
+BACKEND:
+TRCP (for type safe)
+zod (to define schemas to validate data)
+Nodejs + express (Fastify???)
+
+
+DB:
+PostgreSQL
+DrizzleORM
+
+Auth:
+JWT (with passport.js)
+
+DEPLOYMENT:
+
+Frontend:
+Vercel / Netlify
+
+backend:
+
+Render / Fly.io 
+Supabase?? 
+
+optional enhancements:
+
+webSockets -> real-time updates
+Redis -> caching and queueing (stock updates or logs)
+testing -> vitest (frontend), jest (backend)

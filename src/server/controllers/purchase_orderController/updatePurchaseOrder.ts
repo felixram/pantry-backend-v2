@@ -1,0 +1,305 @@
+import z from "zod";
+import { authedMutation } from "../../trpc.ts";
+import { TRPCError } from "@trpc/server";
+import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
+import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
+import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts";
+import { Product } from "../../../db/schema/product.ts";
+import { ORDER_STATUS } from "../../../types/orders.ts";
+import { isLocationScoped, type userRoles } from "../../../types/user.ts";
+import { eq } from "drizzle-orm";
+import { receivePurchaseOrder } from "./helpers/receivePurchaseOrder.ts";
+import {
+  validateRoleStatusTransition,
+  isTerminalStateForRole,
+} from "./helpers/statusValidation.ts";
+import {
+  validatePermission,
+  canEditUnlockedPO,
+} from "./helpers/permissionMatrix.ts";
+import { validateLocationAccess } from "../../../utils/locationFilter.ts";
+
+export const updatePurchaseOrder = authedMutation
+  .input(
+    z.object({
+      purchaseOrderId: z.string(),
+      status: z
+        .enum([
+          ORDER_STATUS.draft,
+          ORDER_STATUS.pendingApproval,
+          ORDER_STATUS.approved,
+          ORDER_STATUS.ordered,
+          ORDER_STATUS.rejected,
+          ORDER_STATUS.cancelled,
+          ORDER_STATUS.received,
+        ] as const)
+        .optional(),
+      destination_location_id: z.string().optional(),
+      supplier_id: z.string().optional(),
+      items: z
+        .array(
+          z.object({
+            product_id: z.string(),
+            qty: z.number().positive(),
+            unit_price: z.number().nonnegative(),
+          }),
+        )
+        .optional(),
+      // Received items with actual quantities (for receiving workflow)
+      receivedItems: z
+        .array(
+          z.object({
+            itemId: z.string(),
+            receivedQty: z.number().nonnegative(),
+            notes: z.string().optional(),
+          }),
+        )
+        .optional(),
+      reason: z.string().optional().default(""),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
+    return await ctx.db.transaction(async (tx) => {
+      // 1. Get the current purchase order
+      const existingOrder = await tx.query.PurchaseOrder.findFirst({
+        where: eq(PurchaseOrder.id, input.purchaseOrderId),
+        with: {
+          purchaseOrderItems: true,
+        },
+      });
+
+      if (!existingOrder) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Purchase order not found",
+        });
+      }
+
+      // Validate user has access to this PO's destination location
+      if (existingOrder.destination_location_id) {
+        validateLocationAccess(
+          ctx.user!,
+          ctx.userLocationId,
+          existingOrder.destination_location_id
+        );
+      }
+
+      // If changing destination location, validate user has access to the new location
+      if (input.destination_location_id) {
+        validateLocationAccess(
+          ctx.user!,
+          ctx.userLocationId,
+          input.destination_location_id
+        );
+      }
+
+      // 2. Check if order is in a terminal state for this role
+      const userRole = ctx.user!.role as userRoles;
+
+      // Check if ADMIN is editing an unlocked APPROVED PO
+      const isUnlockedEdit = canEditUnlockedPO(
+        { status: existingOrder.status, is_unlocked: existingOrder.is_unlocked },
+        userRole
+      );
+
+      // If not an unlocked edit, apply normal permission rules
+      if (!isUnlockedEdit) {
+        if (isTerminalStateForRole(existingOrder.status, userRole)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Cannot update purchase order in ${existingOrder.status} state`,
+          });
+        }
+
+        // 2.1. Validate header changes using permission matrix
+        if (input.supplier_id || input.destination_location_id) {
+          validatePermission(
+            userRole,
+            existingOrder.status,
+            "edit_header"
+          );
+        }
+
+        // 2.2. Validate item changes using permission matrix
+        if (input.items && input.items.length > 0) {
+          validatePermission(
+            userRole,
+            existingOrder.status,
+            "edit_items"
+          );
+        }
+      }
+
+      // Track changes for audit log
+      const changes: Array<{
+        fieldChanged: string;
+        oldValue: string;
+        newValue: string;
+      }> = [];
+
+      // 3. Handle status update
+      if (input.status && input.status !== existingOrder.status) {
+        validateRoleStatusTransition(
+          userRole,
+          existingOrder.status,
+          input.status
+        );
+
+        // Special validation for RECEIVED status
+        if (input.status === ORDER_STATUS.received) {
+          const locationToCheck =
+            input.destination_location_id ||
+            existingOrder.destination_location_id;
+
+          if (!locationToCheck) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "destination_location_id is required to mark order as RECEIVED",
+            });
+          }
+        }
+
+        changes.push({
+          fieldChanged: "status",
+          oldValue: existingOrder.status,
+          newValue: input.status,
+        });
+      }
+
+      // 4. Handle supplier_id update
+      if (
+        input.supplier_id &&
+        input.supplier_id !== existingOrder.supplier_id
+      ) {
+        changes.push({
+          fieldChanged: "supplier_id",
+          oldValue: existingOrder.supplier_id || "null",
+          newValue: input.supplier_id,
+        });
+      }
+
+      // 4.5. Handle destination_location_id update
+      if (
+        input.destination_location_id &&
+        input.destination_location_id !== existingOrder.destination_location_id
+      ) {
+        changes.push({
+          fieldChanged: "destination_location_id",
+          oldValue: existingOrder.destination_location_id || "null",
+          newValue: input.destination_location_id,
+        });
+      }
+
+      // 5. Handle items update
+      if (input.items && input.items.length > 0) {
+        // Validate all products exist
+        for (const item of input.items) {
+          const product = await tx.query.Product.findFirst({
+            where: eq(Product.id, item.product_id),
+          });
+
+          if (!product) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: `Product with id ${item.product_id} not found`,
+            });
+          }
+        }
+
+        // Delete existing items
+        await tx
+          .delete(PurchaseOrderItem)
+          .where(
+            eq(PurchaseOrderItem.purchase_order_id, input.purchaseOrderId),
+          );
+
+        // Insert new items
+        await tx.insert(PurchaseOrderItem).values(
+          input.items.map((item) => ({
+            purchase_order_id: input.purchaseOrderId,
+            product_id: item.product_id,
+            qty: item.qty,
+            unit_price: item.unit_price,
+          })),
+        );
+
+        changes.push({
+          fieldChanged: "items",
+          oldValue: JSON.stringify(existingOrder.purchaseOrderItems),
+          newValue: JSON.stringify(input.items),
+        });
+      }
+
+      // 6. Update the purchase order
+      const finalStatus = input.status || existingOrder.status;
+      const finalDestinationLocationId =
+        input.destination_location_id || existingOrder.destination_location_id;
+      const finalSupplierId =
+        input.supplier_id || existingOrder.supplier_id;
+
+      await tx
+        .update(PurchaseOrder)
+        .set({
+          status: finalStatus,
+          destination_location_id: finalDestinationLocationId,
+          supplier_id: finalSupplierId,
+        })
+        .where(eq(PurchaseOrder.id, input.purchaseOrderId));
+
+      // 7. Log all changes to audit table
+      // Always log status changes for audit trail
+      // Log other changes for non-draft orders by USER, or for ADMIN on unlocked POs
+      const hasStatusChange = changes.some(c => c.fieldChanged === "status");
+      const shouldLog = changes.length > 0 && (
+        hasStatusChange || // Always log status changes
+        (existingOrder.status !== ORDER_STATUS.draft && isLocationScoped(ctx.user!.role)) || // Log location-scoped user changes on non-draft
+        isUnlockedEdit // Log ADMIN changes on unlocked POs
+      );
+
+      if (shouldLog) {
+        await tx.insert(PurchaseOrderAudit).values(
+          changes.map((change) => ({
+            purchaseOrderId: input.purchaseOrderId,
+            userId: ctx.user!.id,
+            fieldChanged: change.fieldChanged,
+            oldValue: change.oldValue,
+            newValue: change.newValue,
+            reason: input.reason,
+          })),
+        );
+      }
+
+      // 8. If status changed to RECEIVED, update stock
+      let stockUpdateSummary: string | null = null;
+      if (
+        input.status === ORDER_STATUS.received &&
+        finalDestinationLocationId
+      ) {
+        stockUpdateSummary = await receivePurchaseOrder(
+          tx,
+          input.purchaseOrderId,
+          finalDestinationLocationId,
+          ctx.user!.id,
+          ctx.tenantId!,
+          input.receivedItems,
+          input.reason || undefined,
+        );
+      }
+
+      return {
+        message: "Purchase order updated successfully",
+        purchaseOrderId: input.purchaseOrderId,
+        status: finalStatus,
+        changesLogged: changes.length,
+        stockUpdateSummary,
+      };
+    });
+  });

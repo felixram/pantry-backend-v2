@@ -1,0 +1,2 @@
+ALTER TABLE "inventory_count_session" ADD COLUMN "completed_by" uuid;--> statement-breakpoint
+ALTER TABLE "inventory_count_session" ADD CONSTRAINT "inventory_count_session_completed_by_user_id_fk" FOREIGN KEY ("completed_by") REFERENCES "public"."user"("id") ON DELETE no action ON UPDATE no action;

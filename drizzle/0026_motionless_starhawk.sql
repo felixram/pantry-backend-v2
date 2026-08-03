@@ -1,0 +1,2 @@
+ALTER TABLE "location" ADD COLUMN "count_designated_user_id" uuid;--> statement-breakpoint
+ALTER TABLE "location" ADD CONSTRAINT "location_count_designated_user_id_user_id_fk" FOREIGN KEY ("count_designated_user_id") REFERENCES "public"."user"("id") ON DELETE no action ON UPDATE no action;

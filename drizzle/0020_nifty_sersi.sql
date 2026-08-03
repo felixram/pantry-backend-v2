@@ -1,0 +1,2 @@
+ALTER TABLE "purchase_order" DROP CONSTRAINT "purchase_order_po_number_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "purchase_order_po_number_tenant_unique" ON "purchase_order" USING btree ("po_number","tenant_id");

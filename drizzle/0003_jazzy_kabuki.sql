@@ -1,0 +1,1 @@
+ALTER TABLE "product" ALTER COLUMN "activeVersionId" DROP NOT NULL;

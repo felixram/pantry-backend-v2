@@ -1,0 +1,398 @@
+//entry point for Express and trpc middleware
+import express from "express"
+import dotenv from "dotenv"
+import path from "path"
+import { fileURLToPath } from "url"
+import { createExpressMiddleware } from "@trpc/server/adapters/express"
+import { appRouter } from "./server/routers/index.ts"
+import cors from "cors"
+import helmet from "helmet"
+import rateLimit from "express-rate-limit"
+import { createContext } from "./server/context.ts"
+import cookieParser from "cookie-parser"
+import { db, closeDatabase } from "./db/index.ts"
+import { sql, eq, and, isNull } from "drizzle-orm"
+import { logger } from "./utils/logger.ts"
+import { User } from "./db/schema/users.ts"
+import { Tenant } from "./db/schema/tenant.ts"
+import { Location } from "./db/schema/location.ts"
+import { STATUS } from "./types/user.ts"
+import { createMagicLinkToken } from "./utils/tokenUtils.ts"
+import { getISOWeekIdentifier } from "./utils/dateUtils.ts"
+import { sendInventoryCountReminder } from "./services/email/emailService.ts"
+import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
+import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
+
+dotenv.config()
+
+// Get __dirname equivalent for ESM
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+const app = express()
+const PORT = process.env.PORT || 3030
+
+// Log startup
+logger.info({ port: PORT, env: process.env.NODE_ENV }, "Starting server...")
+
+// Trust first proxy (Railway, Render, etc.) so rate limiting uses the real client IP
+app.set("trust proxy", 1)
+
+// Security headers
+app.use(helmet())
+
+// CORS configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || ["http://localhost:5173"]
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}))
+
+// Rate limiting - scoped to API routes only (disabled in development for testing)
+const isDevelopment = process.env.NODE_ENV === "development"
+
+if (!isDevelopment) {
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1500, // limit each IP to 1500 API requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many requests, please try again later." },
+  })
+  app.use("/trpc", apiLimiter)
+
+  // Stricter rate limit for auth endpoints
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20, // 20 login attempts per 15 minutes
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many login attempts, please try again later." },
+  })
+  app.use("/trpc/auth.login", authLimiter)
+}
+
+app.use(cookieParser())
+// Parse JSON for all routes except those that handle their own body parsing
+app.use((req, res, next) => {
+  if (req.path === "/api/webhooks/resend-inbound") return next()
+  if (req.path.startsWith("/api/invoices")) return next()
+  express.json()(req, res, next)
+})
+
+// Health check endpoints
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() })
+})
+
+app.get("/ready", async (_req, res) => {
+  try {
+    await db.execute(sql`SELECT 1`)
+    res.status(200).json({ ready: true, timestamp: new Date().toISOString() })
+  } catch {
+    res.status(503).json({ ready: false, error: "Database connection failed" })
+  }
+})
+
+// Cron endpoint: called by Railway cron every hour
+// Schedule: 0 * * * *
+// Command: curl -X POST https://your-api.railway.app/api/cron/inventory-reminder -H "Authorization: Bearer $CRON_SECRET"
+app.post("/api/cron/inventory-reminder", async (req, res) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: "Unauthorized" })
+  }
+
+  try {
+    const now = new Date()
+    const weekIdentifier = getISOWeekIdentifier(now)
+    const clientUrl = process.env.CLIENT_URL ?? "http://localhost:5173"
+
+    // Fetch all locations with reminder enabled and a designated counter (across non-demo tenants)
+    const enabledLocations = await db
+      .select({
+        id: Location.id,
+        count_reminder_day: Location.count_reminder_day,
+        count_reminder_time: Location.count_reminder_time,
+        count_reminder_tz: Location.count_reminder_tz,
+        count_designated_user_id: Location.count_designated_user_id,
+      })
+      .from(Location)
+      .innerJoin(Tenant, and(eq(Location.tenant_id, Tenant.id), eq(Tenant.is_demo, false), isNull(Tenant.deletedAt)))
+      .where(
+        and(
+          eq(Location.count_reminder_enabled, true),
+          isNull(Location.deletedAt),
+        ),
+      )
+
+    // Determine which locations should fire now (match current hour in their TZ)
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    const designatedUserIds: string[] = []
+
+    for (const loc of enabledLocations) {
+      if (loc.count_reminder_day === null || !loc.count_reminder_time || !loc.count_designated_user_id) continue
+
+      const tz = loc.count_reminder_tz ?? "UTC"
+      try {
+        const parts = Object.fromEntries(
+          new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            weekday: "short",
+            hour: "2-digit",
+            hour12: false,
+          }).formatToParts(now).map(({ type, value }) => [type, value])
+        )
+        const localDay = dayNames.indexOf(parts.weekday ?? "")
+        const localHour = parseInt(parts.hour ?? "-1", 10)
+        const [scheduledHour] = loc.count_reminder_time.split(":").map(Number)
+
+        if (localDay === loc.count_reminder_day && localHour === scheduledHour) {
+          designatedUserIds.push(loc.count_designated_user_id)
+        }
+      } catch {
+        logger.warn({ locationId: loc.id, tz }, "Invalid timezone on location, skipping")
+      }
+    }
+
+    if (designatedUserIds.length === 0) {
+      logger.info({ weekIdentifier }, "Inventory reminder cron: no locations scheduled for this hour")
+      return res.json({ success: true, weekIdentifier, emailsSent: 0, emailsFailed: 0 })
+    }
+
+    // Fetch the designated users for matched locations
+    const usersToNotify = await db
+      .select({
+        id: User.id,
+        name: User.name,
+        email: User.email,
+        role: User.role,
+        tenantName: Tenant.name,
+      })
+      .from(User)
+      .innerJoin(Tenant, eq(User.tenant_id, Tenant.id))
+      .where(
+        and(
+          eq(User.status, STATUS.active),
+          isNull(User.deletedAt),
+          sql`${User.id} = ANY(ARRAY[${sql.join(designatedUserIds.map(id => sql`${id}::uuid`), sql`, `)}])`,
+        ),
+      )
+
+    const results = await Promise.allSettled(
+      usersToNotify.map(async (user) => {
+        const token = createMagicLinkToken({ id: user.id, role: user.role, purpose: "count_magic_link" })
+        const magicLink = `${clientUrl}/inventory/count?token=${token}`
+        return sendInventoryCountReminder({
+          to: user.email,
+          userName: user.name,
+          magicLink,
+          orgName: user.tenantName,
+          weekIdentifier,
+        })
+      }),
+    )
+
+    const emailsSent = results.filter((r) => r.status === "fulfilled").length
+    const emailsFailed = results.filter((r) => r.status === "rejected").length
+
+    logger.info({ weekIdentifier, emailsSent, emailsFailed, locationsMatched: designatedUserIds.length }, "Inventory reminder cron completed")
+    return res.json({ success: true, weekIdentifier, emailsSent, emailsFailed })
+  } catch (error) {
+    logger.error({ error }, "Cron inventory-reminder failed")
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+// Manual invoice upload (REST endpoint — multer handles multipart/form-data)
+app.use("/api/invoices", invoiceUploadRouter)
+
+// Resend inbound email webhook: receives forwarded invoice emails
+// Use express.raw() to get the raw body for Svix signature verification,
+// then parse JSON manually in the handler
+app.post(
+  "/api/webhooks/resend-inbound",
+  express.raw({ type: "application/json" }),
+  handleResendInbound
+)
+
+// tRPC middleware
+app.use(
+  "/trpc",
+  createExpressMiddleware({
+    router: appRouter,
+    createContext,
+    onError({ error, path, type }) {
+      if (error.code === "INTERNAL_SERVER_ERROR") {
+        logger.error(
+          {
+            path,
+            type,
+            errorCode: error.code,
+            cause:
+              error.cause instanceof Error
+                ? {
+                    name: error.cause.name,
+                    message: error.cause.message,
+                    ...(("code" in error.cause) ? { pgCode: (error.cause as any).code } : {}),
+                    ...(("constraint_name" in error.cause) ? { constraint: (error.cause as any).constraint_name } : {}),
+                    ...(("table_name" in error.cause) ? { table: (error.cause as any).table_name } : {}),
+                  }
+                : String(error.cause),
+          },
+          "tRPC internal error"
+        )
+      }
+    },
+  })
+)
+
+// Serve static frontend files in production
+const isProduction = process.env.NODE_ENV === "production"
+if (isProduction) {
+  // SSR for landing page - serve pre-rendered HTML for instant load
+  const { renderLandingPage } = await import("./ssr/renderLanding.ts")
+  app.get("/", async (_req, res) => {
+    try {
+      const html = await renderLandingPage("/")
+      res.set("Content-Type", "text/html")
+      res.send(html)
+    } catch (error) {
+      logger.error({ error }, "SSR render failed, falling back to static")
+      res.sendFile(path.join(__dirname, "../../client/dist/index.html"))
+    }
+  })
+
+  // Protected pages — inject __SSR_USER__ for instant auth, data loads client-side
+  const { verifyToken } = await import("./utils/tokenUtils.ts")
+  const fs = await import("fs")
+
+  let templateCache: string | null = null
+
+  // NOTE: /inventory/count is intentionally NOT listed here — it handles its own
+  // authentication via magic link tokens in the query string (no cookie required on entry).
+  const ssrProtectedRoutes = [
+    "/dashboard",
+    "/products",
+    "/stock",
+    "/purchase-orders",
+    "/suppliers",
+    "/categories",
+    "/locations",
+    "/users",
+    "/invoices",
+  ]
+
+  app.get(ssrProtectedRoutes, async (req, res) => {
+    try {
+      const token = req.cookies?.token
+      if (!token) {
+        return res.redirect("/login")
+      }
+
+      const jwtPayload = verifyToken(token)
+      if (!jwtPayload) {
+        return res.redirect("/login")
+      }
+
+      // Quick user query for auth store pre-population (join Tenant to check deletedAt)
+      const [dbUser] = await db
+        .select({
+          name: User.name,
+          last_name: User.last_name,
+          email: User.email,
+          location_id: User.location_id,
+          tenant_id: User.tenant_id,
+          tenantDeletedAt: Tenant.deletedAt,
+        })
+        .from(User)
+        .innerJoin(Tenant, eq(User.tenant_id, Tenant.id))
+        .where(eq(User.id, jwtPayload.id))
+
+      // If tenant is deleted, clear stale cookie and redirect to login
+      if (!dbUser || dbUser.tenantDeletedAt) {
+        res.cookie("token", "", {
+          httpOnly: true,
+          expires: new Date(0),
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "strict",
+          path: "/",
+        })
+        return res.redirect("/login")
+      }
+
+      const ssrUser = dbUser
+        ? {
+            id: jwtPayload.id,
+            role: jwtPayload.role,
+            name: `${dbUser.name} ${dbUser.last_name}`.trim(),
+            email: dbUser.email,
+            location_id: dbUser.location_id,
+          }
+        : { id: jwtPayload.id, role: jwtPayload.role }
+
+      // Read template (cached after first read)
+      if (!templateCache) {
+        templateCache = fs.readFileSync(
+          path.join(__dirname, "../../client/dist/index.html"),
+          "utf-8"
+        )
+      }
+
+      // Inject only auth data — no data prefetch, no renderToString
+      const html = templateCache.replace(
+        "</head>",
+        `<script>window.__SSR_USER__ = ${JSON.stringify(ssrUser)};</script>\n</head>`
+      )
+
+      res.set("Content-Type", "text/html")
+      res.send(html)
+    } catch (error) {
+      logger.error({ error, path: req.path }, "Auth injection failed, falling back to static")
+      res.sendFile(path.join(__dirname, "../../client/dist/index.html"))
+    }
+  })
+
+  // Serve static files from the client build directory
+  const clientDistPath = path.join(__dirname, "../../client/dist")
+  app.use(express.static(clientDistPath))
+
+  // Handle client-side routing - serve index.html for all non-API routes
+  // Express 5.x requires named wildcard parameter
+  app.get("/{*splat}", (_req, res) => {
+    res.sendFile(path.join(clientDistPath, "index.html"))
+  })
+
+  logger.info({ path: clientDistPath }, "Serving static frontend files with SSR for landing and protected pages")
+}
+
+// Start server
+const server = app.listen(PORT, () => {
+  logger.info({ port: PORT }, "Server listening")
+})
+
+// Graceful shutdown
+const gracefulShutdown = async (signal: string) => {
+  logger.info({ signal }, "Received shutdown signal, shutting down gracefully...")
+  server.close(async () => {
+    logger.info("HTTP server closed")
+    try {
+      await closeDatabase()
+      logger.info("Database connection closed")
+    } catch (error) {
+      logger.error({ error }, "Error closing database")
+    }
+    process.exit(0)
+  })
+
+  // Force close after 10 seconds
+  setTimeout(() => {
+    logger.error("Could not close connections in time, forcefully shutting down")
+    process.exit(1)
+  }, 10000)
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+process.on("SIGINT", () => gracefulShutdown("SIGINT"))
+
+export type AppRouter = typeof appRouter

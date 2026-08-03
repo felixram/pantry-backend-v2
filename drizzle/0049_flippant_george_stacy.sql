@@ -1,0 +1,1 @@
+ALTER TABLE "stock" ADD COLUMN "display_unit" text;

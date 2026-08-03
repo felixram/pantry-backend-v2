@@ -1,0 +1,42 @@
+import { index, pgTable, real, text, uuid, varchar } from "drizzle-orm/pg-core"
+import { createdAt, deletedAt, id, updatedAt } from "../schemaHelpers.ts"
+import { relations } from "drizzle-orm"
+import { Product } from "./product.ts"
+import { PurchaseOrder } from "./purchaseOrder.ts"
+import { Tenant } from "./tenant.ts"
+
+export const Supplier = pgTable(
+  "supplier",
+  {
+    id,
+    name: text().notNull(),
+    contact_name: text().notNull(),
+    phone: text(),
+    email: text(),
+    address: text(),
+    delivery_days: text(),
+    free_shipping_minimum: real(),
+    shipping_fee: real(),
+    supplier_type: varchar("supplier_type", { length: 20 })
+      .notNull()
+      .default("PRIMARY"),
+    preferred_order_method: varchar("preferred_order_method", { length: 20 }),
+    notes: text(),
+    tenant_id: uuid("tenant_id")
+      .notNull()
+      .references(() => Tenant.id),
+    createdAt,
+    updatedAt,
+    deletedAt,
+  },
+  (t) => [index().on(t.name), index().on(t.tenant_id), index().on(t.deletedAt)]
+)
+
+export const SupplierRelations = relations(Supplier, ({ many, one }) => ({
+  products: many(Product),
+  purchaseOrders: many(PurchaseOrder),
+  tenant: one(Tenant, {
+    fields: [Supplier.tenant_id],
+    references: [Tenant.id],
+  }),
+}))

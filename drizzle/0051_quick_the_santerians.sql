@@ -1,0 +1,1 @@
+ALTER TABLE "inventory_count_session" ADD COLUMN "suggested_pos_created_at" timestamp;

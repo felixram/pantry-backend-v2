@@ -1,0 +1,1 @@
+ALTER TABLE "product_version" ALTER COLUMN "id" SET DEFAULT gen_random_uuid();

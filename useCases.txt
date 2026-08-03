@@ -1,0 +1,1552 @@
+================================================================================
+                    VENTORY MANAGEMENT SYSTEM
+                         BACKEND USE CASES DOCUMENTATION
+================================================================================
+
+Last Updated: 2026-02-06
+Version: 1.3
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1. SYSTEM OVERVIEW
+2. AUTHENTICATION & AUTHORIZATION USE CASES
+3. PRODUCT MANAGEMENT USE CASES
+4. INVENTORY MANAGEMENT USE CASES
+5. PURCHASE ORDER MANAGEMENT USE CASES
+6. SUPPLIER MANAGEMENT USE CASES
+7. LOCATION MANAGEMENT USE CASES
+8. CATEGORY MANAGEMENT USE CASES
+9. USER MANAGEMENT USE CASES
+10. STOCK MOVEMENT TRACKING USE CASES
+11. REPORTING & ANALYTICS USE CASES
+12. TECHNICAL USE CASES
+13. COMPLETE API ENDPOINTS REFERENCE
+14. DATABASE SCHEMA OVERVIEW
+15. BUSINESS WORKFLOWS
+16. PRODUCTION INFRASTRUCTURE
+
+================================================================================
+1. SYSTEM OVERVIEW
+================================================================================
+
+TECHNOLOGY STACK:
+-----------------
+- API Framework: tRPC (Type-safe RPC framework)
+- HTTP Server: Express.js
+- Database: PostgreSQL
+- ORM: Drizzle ORM
+- Language: TypeScript
+- Validation: Zod schemas
+- Authentication: JWT (JSON Web Tokens)
+- Testing: Vitest
+
+ARCHITECTURE PATTERN:
+--------------------
+- Type-safe API using tRPC (not traditional REST)
+- Domain-driven design with controllers organized by business domain
+- Transaction-safe operations using Drizzle ORM
+- Role-based access control (ADMIN/USER)
+- Comprehensive audit trails for critical operations
+
+API ENDPOINT FORMAT:
+-------------------
+All API calls use the tRPC format:
+POST http://localhost:3030/trpc/<router>.<procedure>
+
+Example: POST http://localhost:3030/trpc/product.create
+
+TOTAL ENDPOINTS: 50 procedures across 10 routers
+
+================================================================================
+2. AUTHENTICATION & AUTHORIZATION USE CASES
+================================================================================
+
+UC-AUTH-001: User Login
+------------------------
+Actor: Any user
+Description: Authenticate user credentials and establish session
+Input: email, password
+Process:
+  1. Validate user exists in database
+  2. Check user status is ACTIVE (not INACTIVE)
+  3. Compare password hash using bcrypt
+  4. Generate JWT token with 7-day expiration
+  5. Set HTTP-only secure cookie
+Output: User information and authentication token
+Endpoint: auth.login
+Access: Public
+
+UC-AUTH-002: User Logout
+-------------------------
+Actor: Authenticated user
+Description: Terminate user session
+Process:
+  1. Clear authentication cookie (sets expiration to epoch)
+  2. Invalidate session
+Output: Success confirmation message
+Endpoint: auth.logout
+Access: Authenticated
+Procedure Type: mutation (requires user session)
+
+UC-AUTH-003: Get Current User
+------------------------------
+Actor: Authenticated user
+Description: Retrieve current user information from session
+Process:
+  1. Extract JWT from cookie
+  2. Verify token signature and expiration
+  3. Return user details
+Output: Current user information (id, name, email, role)
+Endpoint: auth.current
+Access: Authenticated
+
+AUTHORIZATION LEVELS:
+--------------------
+1. Public: No authentication required (login, initial user creation)
+2. Authenticated: Valid user session required (most operations)
+3. Admin: Requires ADMIN role (location management, admin user updates)
+
+USER ROLES:
+----------
+- ADMIN: Full system access, can manage locations and all users
+- USER: Standard access to inventory operations
+
+USER STATUS:
+-----------
+- ACTIVE: User can login and perform operations
+- INACTIVE: User account disabled, cannot login
+
+================================================================================
+3. PRODUCT MANAGEMENT USE CASES
+================================================================================
+
+UC-PROD-001: Create Product
+----------------------------
+Actor: Authenticated user
+Description: Create new product with initial version
+Input:
+  - name (required)
+  - sku (optional, must be unique)
+  - unit (required, e.g., "kg", "unit", "liter")
+  - costPrice (optional)
+  - sellingPrice (optional)
+  - description (optional)
+  - supplier_id (optional)
+  - category_id (optional)
+Process:
+  1. Validate SKU is unique (if provided)
+  2. Create Product record in transaction
+  3. Create ProductVersion record (version 1)
+  4. Update Product.activeVersionId to link to version
+  5. Return product and version IDs
+Output: Product ID, Version ID, success message
+Endpoint: product.create
+Access: Authenticated
+Business Rule: SKU must be unique across all products
+
+UC-PROD-002: Update Product
+----------------------------
+Actor: Authenticated user
+Description: Update product details, creates new version if price changes
+Input:
+  - id (required)
+  - name, sku, unit, supplier_id, category_id (optional)
+  - costPrice, sellingPrice, description (optional)
+Process:
+  1. Validate product exists
+  2. Check if costPrice or description changed
+  3. If changed: Create new ProductVersion with incremented versionNumber
+  4. Update Product record
+  5. If new version created, update activeVersionId
+Output: Success message, new version number (if created)
+Endpoint: product.update
+Access: Authenticated
+Business Rule: Price changes trigger new version creation
+
+UC-PROD-003: Get All Products
+------------------------------
+Actor: Authenticated user
+Description: Retrieve list of all products
+Process:
+  1. Query all products from database
+  2. Include active version, category, and supplier relationships
+Output: Array of products with related data
+Endpoint: product.getAll
+Access: Authenticated
+
+UC-PROD-004: Get Product by ID
+-------------------------------
+Actor: Authenticated user
+Description: Retrieve single product details
+Input: product_id
+Process:
+  1. Query product by ID
+  2. Include active version, category, supplier relationships
+  3. Return 404 if not found
+Output: Product details with relationships
+Endpoint: product.getById
+Access: Authenticated
+
+UC-PROD-005: Delete Product
+----------------------------
+Actor: Authenticated user
+Description: Soft delete product from system
+Input: product_id
+Process:
+  1. Validate product exists
+  2. Mark as deleted (soft delete pattern)
+Output: Success confirmation
+Endpoint: product.delete
+Access: Authenticated
+Business Rule: Soft delete preserves historical data
+
+UC-PROD-006: Get Product Price History
+---------------------------------------
+Actor: Admin user
+Description: View historical price changes for a product
+Input: product_id
+Process:
+  1. Validate product exists
+  2. Query all ProductVersions for the product
+  3. Order by version number (newest first)
+Output: Array of versions with prices and dates
+Endpoint: product.getPriceHistory
+Access: Admin Only
+
+UC-PROD-007: Get Product Cost Analysis
+---------------------------------------
+Actor: Admin user
+Description: Analyze product cost trends and statistics
+Input: product_id
+Process:
+  1. Validate product exists
+  2. Calculate average, min, max cost from all versions
+  3. Get last purchase cost from purchase orders
+  4. Determine price trend (increasing/decreasing/stable) from last 3 versions
+  5. Count total versions
+Output:
+  - Current cost
+  - Average cost
+  - Lowest/highest costs
+  - Last purchase cost
+  - Price trend
+  - Total versions
+Endpoint: product.getCostAnalysis
+Access: Admin Only
+
+PRODUCT VERSIONING SYSTEM:
+--------------------------
+Every product maintains a version history:
+- Version 1 created with initial product
+- New version created when costPrice or description changes
+- Each version has: versionNumber, costPrice, sellingPrice, description, createdAt
+- Product.activeVersionId points to current version
+- Enables historical price tracking and cost analysis
+
+================================================================================
+4. INVENTORY MANAGEMENT USE CASES
+================================================================================
+
+UC-STOCK-001: Create Stock Record
+----------------------------------
+Actor: Authenticated user
+Description: Initialize stock tracking for a product at a location
+Input:
+  - location_id (required)
+  - productId (required)
+  - qty (required, initial quantity)
+  - minimumStockLevel (optional)
+Process:
+  1. Validate location and product exist
+  2. Check unique constraint (one stock record per product-location pair)
+  3. Create Stock record
+  4. Log initial stock movement
+Output: Stock record ID
+Endpoint: stock.create
+Access: Authenticated
+Business Rule: One stock record per product-location combination
+
+UC-STOCK-002: Get All Stock
+----------------------------
+Actor: Authenticated user
+Description: View all stock records across all locations
+Process:
+  1. Query all stock records
+  2. Include product and location details
+Output: Array of stock records with relationships
+Endpoint: stock.getAll
+Access: Authenticated
+
+UC-STOCK-003: Get Stock by ID
+------------------------------
+Actor: Authenticated user
+Description: View specific stock record
+Input: stock_id
+Process:
+  1. Query stock record by ID
+  2. Include product and location relationships
+Output: Stock record details
+Endpoint: stock.getById
+Access: Authenticated
+
+UC-STOCK-004: Adjust Stock Quantity
+------------------------------------
+Actor: Authenticated user
+Description: Increase or decrease stock quantity
+Input:
+  - stock_id (required)
+  - change_qty (required, positive=increase, negative=decrease)
+  - reason (required, min 3 characters)
+Process:
+  1. Validate stock record exists
+  2. Calculate new quantity (current + change_qty)
+  3. Validate new quantity >= 0 (no negative stock)
+  4. Update stock quantity in transaction
+  5. Log stock movement with user_id and reason
+Output: New quantity, success message
+Endpoint: stock.adjust
+Access: Authenticated
+Business Rule: Stock quantity cannot go negative
+
+UC-STOCK-005: Transfer Stock Between Locations
+-----------------------------------------------
+Actor: Admin user
+Description: Move stock from one location to another
+Input:
+  - product_id (required)
+  - from_location_id (required)
+  - to_location_id (required)
+  - qty (required, must be positive)
+  - reason (required, min 3 characters)
+Process:
+  1. Validate locations are different
+  2. Find or create stock records at both locations
+  3. Validate sufficient stock at source (qty available >= qty to transfer)
+  4. In transaction:
+     a. Decrease source location stock
+     b. Increase destination location stock (create if doesn't exist)
+     c. Log negative movement at source
+     d. Log positive movement at destination
+     e. Cross-reference movements in reason field
+Output: Success confirmation with movement details
+Endpoint: stock.transfer
+Access: Admin Only
+Business Rules:
+  - Cannot transfer to same location
+  - Must have sufficient stock at source
+  - Both movements logged for audit trail
+
+UC-STOCK-006: Set Minimum Stock Level
+--------------------------------------
+Actor: Admin user
+Description: Set reorder threshold for a product at a location
+Input:
+  - stock_id (required)
+  - minimumStockLevel (required)
+Process:
+  1. Validate stock record exists
+  2. Update minimum stock level
+Output: Success confirmation
+Endpoint: stock.setMinimumLevel
+Access: Admin Only
+Purpose: Enables low stock alerts and automatic reorder suggestions
+
+================================================================================
+5. PURCHASE ORDER MANAGEMENT USE CASES
+================================================================================
+
+UC-PO-001: Create Purchase Order
+---------------------------------
+Actor: Authenticated user
+Description: Create or update draft purchase order
+Input:
+  - supplier_id (required)
+  - destination_location_id (optional)
+  - items (array, each with product_id, qty, unit_price)
+  - purchase_order_id (optional, for updating existing draft)
+Process:
+  1. Validate supplier exists
+  2. If purchase_order_id provided:
+     a. Validate PO exists and is in DRAFT status
+     b. Delete existing items
+     c. Create new items
+  3. If new PO:
+     a. Create PurchaseOrder with DRAFT status
+     b. Create PurchaseOrderItems
+Output: Purchase order ID and items
+Endpoint: purchaseOrder.create
+Access: Authenticated
+Business Rule: Can only modify DRAFT status orders
+
+UC-PO-002: Update Purchase Order Status
+----------------------------------------
+Actor: Authenticated user
+Description: Update PO status through workflow state machine
+Input:
+  - purchase_order_id (required)
+  - status (required)
+  - destination_location_id (optional, required for RECEIVED status)
+  - reason (optional, for audit log)
+Process:
+  1. Validate PO exists
+  2. Validate status transition is allowed (state machine)
+  3. If status = RECEIVED:
+     a. Validate destination_location_id provided
+     b. Process received items (update stock levels)
+     c. Log stock movements
+  4. Update PO status in transaction
+  5. Log change to audit table
+Output: Success message, updated PO
+Endpoint: purchaseOrder.update
+Access: Authenticated
+
+PURCHASE ORDER STATE MACHINE:
+-----------------------------
+DRAFT → PENDING_APPROVAL → APPROVED → ORDERED → RECEIVED
+  ↓           ↓              ↓          ↓
+CANCELLED  REJECTED      CANCELLED  CANCELLED
+
+Terminal States (no further updates allowed):
+- RECEIVED
+- REJECTED
+- CANCELLED
+
+Valid Transitions:
+- DRAFT → PENDING_APPROVAL, CANCELLED
+- PENDING_APPROVAL → APPROVED, REJECTED, CANCELLED
+- APPROVED → ORDERED, CANCELLED
+- ORDERED → RECEIVED, CANCELLED
+
+UC-PO-003: Delete Purchase Order
+---------------------------------
+Actor: Authenticated user
+Description: Remove purchase order
+Input: purchase_order_id
+Process:
+  1. Validate PO exists
+  2. Soft delete (cascade to items)
+Output: Success confirmation
+Endpoint: purchaseOrder.delete
+Access: Authenticated
+
+UC-PO-004: Get All Purchase Orders
+-----------------------------------
+Actor: Authenticated user
+Description: View all purchase orders
+Process:
+  1. Query all purchase orders
+  2. Include supplier, destination, items relationships
+Output: Array of purchase orders
+Endpoint: purchaseOrder.getAll
+Access: Authenticated
+
+UC-PO-005: Get Purchase Order by ID
+------------------------------------
+Actor: Authenticated user
+Description: View specific purchase order details
+Input: purchase_order_id
+Process:
+  1. Query PO by ID
+  2. Include supplier, destination, items, product details
+Output: Complete PO with all relationships
+Endpoint: purchaseOrder.getById
+Access: Authenticated
+
+UC-PO-006: Generate Supplier Email
+-----------------------------------
+Actor: Authenticated user
+Description: Generate HTML email to send to supplier
+Input: purchase_order_id
+Process:
+  1. Validate PO exists
+  2. Fetch complete PO data (supplier, items, products, destination)
+  3. Calculate totals and check free shipping eligibility
+  4. Generate formatted HTML email template
+Output: Email metadata (to, subject, body HTML)
+Endpoint: purchaseOrder.generateEmail
+Access: Authenticated
+
+UC-PO-007: Add Item to Purchase Order
+--------------------------------------
+Actor: Authenticated user
+Description: Add a new line item to an existing purchase order
+Input:
+  - purchaseOrderId (required)
+  - product_id (required)
+  - qty (required, positive)
+  - unit_price (required, non-negative)
+  - reason (required, minimum 3 characters)
+Process:
+  1. Validate PO exists and is not in terminal state (RECEIVED, REJECTED, CANCELLED)
+  2. Validate product exists
+  3. Create new PurchaseOrderItem
+  4. If PO status is PENDING_APPROVAL, APPROVED, or ORDERED and user is not ADMIN:
+     a. Auto-revert PO status to DRAFT
+     b. Log audit entry with change reason
+  5. Log audit entry for item addition
+Output: New item ID, success message
+Endpoint: purchaseOrder.addItem
+Access: Authenticated
+Business Rule: Adding items to non-draft POs reverts them to DRAFT if user is not admin
+
+UC-PO-008: Update Purchase Order Item
+--------------------------------------
+Actor: Authenticated user
+Description: Modify quantity and/or price of a line item
+Input:
+  - purchaseOrderId (required)
+  - itemId (required)
+  - qty (optional, positive)
+  - unit_price (optional, non-negative)
+  - reason (required, minimum 3 characters)
+Process:
+  1. Validate PO and item exist
+  2. Validate PO is not in terminal state
+  3. Store old values for audit
+  4. Update item with new values
+  5. If PO status is PENDING_APPROVAL, APPROVED, or ORDERED and user is not ADMIN:
+     a. Auto-revert PO status to DRAFT
+     b. Log audit entry
+  6. Log item update to audit trail
+Output: Updated item, success message
+Endpoint: purchaseOrder.updateItem
+Access: Authenticated
+Business Rule: Item updates to non-draft POs revert them to DRAFT if user is not admin
+
+UC-PO-009: Remove Item from Purchase Order
+-------------------------------------------
+Actor: Authenticated user
+Description: Delete a line item from a purchase order
+Input:
+  - purchaseOrderId (required)
+  - itemId (required)
+  - reason (required, minimum 3 characters)
+Process:
+  1. Validate PO and item exist
+  2. Validate PO is not in terminal state
+  3. Delete item from database
+  4. If PO status is PENDING_APPROVAL, APPROVED, or ORDERED and user is not ADMIN:
+     a. Auto-revert PO status to DRAFT
+     b. Log audit entry
+  5. Log item removal to audit trail
+Output: Success message
+Endpoint: purchaseOrder.removeItem
+Access: Authenticated
+Business Rule: Item deletion from non-draft POs reverts them to DRAFT if user is not admin
+
+PURCHASE ORDER NUMBERING SYSTEM:
+--------------------------------
+- Auto-generated PO numbers with format: PO-YYYY-XXX
+  - YYYY: 4-digit year
+  - XXX: 3-digit sequential number (restarts each year)
+- Examples: PO-2026-001, PO-2026-002, ..., PO-2026-999
+- Generated on first purchase order creation of each year
+- Tracked in po_counter table with fields:
+  - id: unique identifier
+  - year: year of counter
+  - last_sequence: last used sequence number
+  - createdAt, updatedAt: timestamps
+
+PURCHASE ORDER AUDIT TRAIL:
+---------------------------
+Every change to a purchase order is logged:
+- Field: Which field was changed
+- Old Value: Previous value
+- New Value: New value
+- User: Who made the change
+- Reason: Why the change was made
+- Timestamp: When the change occurred
+
+================================================================================
+6. SUPPLIER MANAGEMENT USE CASES
+================================================================================
+
+UC-SUPP-001: Create Supplier
+-----------------------------
+Actor: Authenticated user
+Description: Add new supplier to system
+Input:
+  - name (required)
+  - contact_name, phone, email, address (optional)
+  - delivery_days (optional)
+  - free_shipping_minimum (optional)
+  - supplier_type (optional, default: SECONDARY)
+  - notes (optional)
+Process:
+  1. Validate supplier data
+  2. Create Supplier record
+Output: Supplier ID
+Endpoint: supplier.create
+Access: Authenticated
+
+UC-SUPP-002: Get All Suppliers (with Pagination)
+------------------------------------------------
+Actor: Authenticated user
+Description: View all suppliers with pagination support
+Input:
+  - search (optional, filters by name, contact_name, phone, email)
+  - limit (optional, default 10, max results per page)
+  - offset (optional, default 0, number of results to skip)
+Process:
+  1. Query suppliers (exclude soft deleted)
+  2. Apply search filter if provided (case-insensitive, partial matches)
+  3. Apply limit and offset for pagination
+  4. Calculate total count for pagination metadata
+  5. Include products count for each supplier
+Output:
+  - results: Array of suppliers matching criteria
+  - pagination: Object with:
+    - total: Total number of matching suppliers
+    - limit: Results per page
+    - offset: Number skipped
+    - page: Current page number
+    - totalPages: Total number of pages
+Endpoint: supplier.getAll
+Access: Authenticated
+Business Rule: Pagination defaults to 10 per page
+
+UC-SUPP-003: Get Supplier by ID
+--------------------------------
+Actor: Authenticated user
+Description: View specific supplier details
+Input: supplier_id
+Process:
+  1. Query supplier by ID
+  2. Include related products if needed
+Output: Supplier details
+Endpoint: supplier.getById
+Access: Authenticated
+
+UC-SUPP-004: Update Supplier
+-----------------------------
+Actor: Authenticated user
+Description: Update supplier information
+Input: supplier_id, updated fields
+Process:
+  1. Validate supplier exists
+  2. Update supplier record
+Output: Success confirmation
+Endpoint: supplier.update
+Access: Authenticated
+
+UC-SUPP-005: Delete Supplier
+-----------------------------
+Actor: Authenticated user
+Description: Remove supplier from system
+Input: supplier_id
+Process:
+  1. Validate supplier exists
+  2. Soft delete supplier
+Output: Success confirmation
+Endpoint: supplier.delete
+Access: Authenticated
+Business Rule: Products linked to supplier will have supplier_id set to NULL
+
+================================================================================
+7. LOCATION MANAGEMENT USE CASES
+================================================================================
+
+UC-LOC-001: Create Location
+----------------------------
+Actor: Admin user
+Description: Add new warehouse/storage location
+Input:
+  - name (required)
+  - address, city, state, postalCode, country (optional)
+  - latitude, longitude (optional)
+  - place_id (optional, must be unique)
+  - active (optional, default: true)
+Process:
+  1. Validate admin role
+  2. Validate place_id uniqueness (if provided)
+  3. Create Location record
+Output: Location ID
+Endpoint: location.create
+Access: Admin Only
+
+UC-LOC-002: Get All Locations
+------------------------------
+Actor: Authenticated user
+Description: View all locations
+Process:
+  1. Query all active locations
+Output: Array of locations
+Endpoint: location.getAll
+Access: Authenticated
+
+UC-LOC-003: Get Location by ID
+-------------------------------
+Actor: Authenticated user
+Description: View specific location details
+Input: location_id
+Process:
+  1. Query location by ID
+  2. Include stock records if needed
+Output: Location details
+Endpoint: location.getById
+Access: Authenticated
+
+UC-LOC-004: Update Location
+----------------------------
+Actor: Admin user
+Description: Update location information
+Input: location_id, updated fields
+Process:
+  1. Validate admin role
+  2. Validate location exists
+  3. Update location record
+Output: Success confirmation
+Endpoint: location.update
+Access: Admin Only
+
+UC-LOC-005: Delete Location
+----------------------------
+Actor: Admin user
+Description: Remove location from system
+Input: location_id
+Process:
+  1. Validate admin role
+  2. Validate location exists
+  3. Soft delete location (sets deletedAt, deletedBy)
+Output: Success confirmation
+Endpoint: location.delete
+Access: Admin Only
+Business Rule: Cascades to stock records at that location
+
+================================================================================
+8. CATEGORY MANAGEMENT USE CASES
+================================================================================
+
+UC-CAT-001: Create Category
+----------------------------
+Actor: Authenticated user
+Description: Add new product category
+Input:
+  - name (required)
+  - description (optional)
+Process:
+  1. Normalize name (lowercase trim)
+  2. Validate name uniqueness
+  3. Create Category record
+Output: Category ID
+Endpoint: category.create
+Access: Authenticated
+Business Rule: Category names are unique (case-insensitive)
+
+UC-CAT-002: Get All Categories
+-------------------------------
+Actor: Authenticated user
+Description: View all categories
+Process:
+  1. Query all categories
+  2. Include product count if needed
+Output: Array of categories
+Endpoint: category.getAll
+Access: Authenticated
+
+UC-CAT-003: Update Category
+----------------------------
+Actor: Authenticated user
+Description: Update category information
+Input: category_id, name, description
+Process:
+  1. Validate category exists
+  2. Validate name uniqueness (if changed)
+  3. Update category record
+Output: Success confirmation
+Endpoint: category.update
+Access: Authenticated
+
+UC-CAT-004: Delete Category
+----------------------------
+Actor: Authenticated user
+Description: Remove category from system
+Input: category_id
+Process:
+  1. Validate category exists
+  2. Delete category record
+Output: Success confirmation
+Endpoint: category.delete
+Access: Authenticated
+Business Rule: Products in category will have category_id set to NULL
+
+================================================================================
+9. USER MANAGEMENT USE CASES
+================================================================================
+
+UC-USER-001: Create User
+-------------------------
+Actor: Admin user (except first user)
+Description: Add new user to system
+Input:
+  - name, lastName (required)
+  - email (required, must be unique)
+  - password (required)
+  - role (optional, default: USER)
+  - status (optional, default: ACTIVE)
+Process:
+  1. Check if this is first user (auto-assign ADMIN role)
+  2. Otherwise require admin authentication
+  3. Validate email uniqueness
+  4. Hash password with bcrypt
+  5. Create User record
+Output: User ID
+Endpoint: users.create
+Access: Public (first user), Admin (subsequent users)
+Business Rule: First user in system automatically becomes ADMIN
+
+UC-USER-002: Update Own Profile
+--------------------------------
+Actor: Authenticated user
+Description: User updates their own information
+Input:
+  - name, lastName, email (optional)
+  - password (optional)
+Process:
+  1. Validate current user
+  2. Hash password if provided
+  3. Update user record
+Output: Success confirmation
+Endpoint: users.update
+Access: Authenticated
+Business Rule: Users can only update their own profile
+
+UC-USER-003: Admin Update User
+-------------------------------
+Actor: Admin user
+Description: Admin updates any user's information
+Input:
+  - user_id (required)
+  - name, lastName, email, password, role, status (optional)
+Process:
+  1. Validate admin role
+  2. Validate target user exists
+  3. Hash password if provided
+  4. Update user record
+Output: Success confirmation
+Endpoint: users.adminUpdate
+Access: Admin Only
+
+UC-USER-004: Delete User
+-------------------------
+Actor: Admin user
+Description: Remove user from system
+Input: user_id
+Process:
+  1. Validate admin role
+  2. Validate user exists
+  3. Soft delete user (sets deletedAt)
+Output: Success confirmation
+Endpoint: users.delete
+Access: Admin Only
+Business Rule: Soft delete preserves historical data
+
+================================================================================
+10. STOCK MOVEMENT TRACKING USE CASES
+================================================================================
+
+UC-MOVE-001: Get All Stock Movements
+-------------------------------------
+Actor: Admin user
+Description: View complete stock movement history (audit trail)
+Process:
+  1. Query all stock movements
+  2. Include product, location, user details
+  3. Order by creation date (newest first)
+Output: Array of stock movements with context
+Endpoint: stockMovement.getAll
+Access: Admin Only
+Purpose: Complete audit trail of all inventory changes
+
+UC-MOVE-002: Get Movements by Product
+--------------------------------------
+Actor: Admin user
+Description: View movement history for specific product
+Input: product_id
+Process:
+  1. Validate product exists
+  2. Query movements filtered by product_id
+  3. Include location and user details
+Output: Array of movements for the product
+Endpoint: stockMovement.getByProduct
+Access: Admin Only
+
+UC-MOVE-003: Get Movements by Location
+---------------------------------------
+Actor: Admin user
+Description: View movement history for specific location
+Input: location_id
+Process:
+  1. Validate location exists
+  2. Query movements filtered by location_id
+  3. Include product and user details
+Output: Array of movements at the location
+Endpoint: stockMovement.getByLocation
+Access: Admin Only
+
+STOCK MOVEMENT LOGGING:
+----------------------
+Every stock quantity change is automatically logged with:
+- Product ID
+- Location ID
+- Quantity change (positive or negative)
+- Reason (why the change occurred)
+- User ID (who made the change)
+- Timestamp (when it occurred)
+
+Sources of stock movements:
+1. Stock adjustments (UC-STOCK-004)
+2. Stock transfers (UC-STOCK-005)
+3. Receiving purchase orders (UC-PO-002)
+
+================================================================================
+11. REPORTING & ANALYTICS USE CASES
+================================================================================
+
+UC-RPT-001: Low Stock Report
+-----------------------------
+Actor: Authenticated user
+Description: Identify products below minimum stock levels
+Process:
+  1. Query all stock records
+  2. Filter where qty < minimumStockLevel
+  3. Calculate shortage (minimumStockLevel - current qty)
+  4. Include product and location details
+  5. Order by shortage (largest first)
+Output:
+  - Product name and ID
+  - Location name
+  - Current quantity
+  - Minimum level
+  - Shortage amount
+Endpoint: report.lowStock
+Access: Authenticated
+Purpose: Identify reorder needs
+
+UC-RPT-002: Inventory Valuation Report
+---------------------------------------
+Actor: Admin user
+Description: Calculate total inventory value
+Process:
+  1. Query all stock records with products
+  2. Join with active product versions for current cost
+  3. Calculate value (qty × costPrice) for each item
+  4. Group by location and/or category
+  5. Sum totals
+Output:
+  - Total inventory value
+  - Value by location
+  - Value by category
+  - Detailed line items
+Endpoint: report.inventoryValuation
+Access: Admin Only
+
+UC-RPT-003: Purchase Order Summary
+-----------------------------------
+Actor: Authenticated user
+Description: Summarize purchase order metrics
+Input:
+  - date_from, date_to (optional)
+  - supplier_id (optional)
+  - status (optional)
+Process:
+  1. Query purchase orders with filters
+  2. Calculate metrics:
+     - Total orders
+     - Orders by status
+     - Total value
+     - Average order value
+  3. Group by supplier if needed
+Output:
+  - Order count by status
+  - Total and average values
+  - Supplier breakdown
+Endpoint: report.purchaseOrderSummary
+Access: Authenticated
+
+UC-RPT-004: Supplier Performance Report
+----------------------------------------
+Actor: Authenticated user
+Description: Analyze supplier metrics
+Process:
+  1. Query all suppliers with purchase orders
+  2. For each supplier calculate:
+     - Total orders placed
+     - Orders by status (completed, cancelled, etc.)
+     - Total order value
+     - Average order value
+     - Completion rate (%)
+  3. Order by total orders or value
+Output:
+  - Supplier name
+  - Order statistics
+  - Financial metrics
+  - Performance indicators
+Endpoint: report.supplierPerformance
+Access: Authenticated
+
+================================================================================
+12. TECHNICAL USE CASES
+================================================================================
+
+UC-TECH-001: Database Transactions
+-----------------------------------
+Description: Ensure data consistency across related operations
+Implementation:
+  - All critical operations use Drizzle ORM transactions
+  - Atomic operations (all succeed or all fail)
+Examples:
+  - Product creation (Product + ProductVersion)
+  - Stock transfer (source decrease + destination increase + 2 movements)
+  - PO receiving (PO update + stock updates + movement logging)
+
+UC-TECH-002: Audit Trail Logging
+---------------------------------
+Description: Track all changes for compliance and debugging
+Implementation:
+  - StockMovement table: logs all inventory changes
+  - PurchaseOrderAudit table: logs all PO field changes
+  - User tracking: all movements include user_id
+  - Reason tracking: all changes require reason field
+
+UC-TECH-003: Soft Delete Pattern
+---------------------------------
+Description: Preserve historical data while removing from active use
+Implementation:
+  - Most entities have deletedAt timestamp field
+  - Locations have deletedBy user reference
+  - Queries filter out deleted records by default
+Entities with soft delete:
+  - Users
+  - Locations
+  - Suppliers
+  - Products
+  - Purchase Orders
+
+UC-TECH-004: Product Versioning
+--------------------------------
+Description: Track historical product data and price changes
+Implementation:
+  - ProductVersion table with versionNumber
+  - New version created on price/description change
+  - Product.activeVersionId points to current version
+  - All versions preserved for historical analysis
+Benefits:
+  - Price history tracking
+  - Cost trend analysis
+  - Historical reporting accuracy
+
+UC-TECH-005: Type Safety
+-------------------------
+Description: Prevent runtime errors through compile-time checking
+Implementation:
+  - TypeScript throughout codebase
+  - tRPC for type-safe API contracts
+  - Zod schemas for runtime validation
+  - Drizzle ORM for type-safe database queries
+
+UC-TECH-006: Role-Based Access Control
+---------------------------------------
+Description: Restrict operations based on user role
+Implementation:
+  - Three procedure types: public, authedProcedure, adminProcedure
+  - Middleware checks user role before execution
+  - UNAUTHORIZED error if not authenticated
+  - FORBIDDEN error if not authorized
+
+UC-TECH-007: Security Hardening
+--------------------------------
+Description: Comprehensive security measures for production deployment
+Implementation:
+  - Helmet.js for HTTP security headers (XSS, clickjacking, MIME sniffing protection)
+  - CORS with environment-variable configuration (ALLOWED_ORIGINS)
+  - Rate limiting: 100 requests/15min general, 10 login attempts/15min
+  - Cookie security: httpOnly, secure (production), sameSite: strict
+  - Strong password validation: 8+ characters, uppercase, lowercase, number required
+  - Sanitized error responses (no internal details leaked to client)
+  - Input validation on all endpoints via Zod schemas
+
+UC-TECH-008: Structured Logging
+--------------------------------
+Description: Production-grade logging for observability and debugging
+Implementation:
+  - Pino logger with JSON format for log aggregation
+  - HTTP request logging via pino-http middleware
+  - Log levels: error, warn, info, debug
+  - Request ID tracking for tracing
+  - Minimal performance overhead
+Configuration:
+  - LOG_LEVEL environment variable support
+  - Automatic timestamp and metadata
+
+UC-TECH-009: Health Check Endpoints
+------------------------------------
+Description: Monitoring endpoints for orchestration and load balancers
+Endpoints:
+  - GET /health - Basic liveness check (returns 200 if server is running)
+  - GET /ready - Readiness check (verifies database connectivity)
+Purpose:
+  - Kubernetes/Docker orchestration integration
+  - Load balancer health monitoring
+  - Zero-downtime deployment support
+Response time: <10ms
+
+UC-TECH-010: Graceful Shutdown
+-------------------------------
+Description: Clean shutdown handling for zero-downtime deployments
+Implementation:
+  - SIGTERM/SIGINT signal handlers
+  - Database connection cleanup on exit
+  - In-flight request completion (10-second timeout)
+  - Proper resource release
+Benefits:
+  - No dropped requests during deployments
+  - Clean database connection termination
+  - Container orchestration compatibility
+
+UC-TECH-011: Rate Limiting
+---------------------------
+Description: Protection against brute-force and DoS attacks
+Configuration:
+  - General endpoints: 100 requests per 15 minutes per IP
+  - Login endpoint: 10 requests per 15 minutes per IP
+  - Configurable via environment variables
+Response:
+  - HTTP 429 Too Many Requests when limit exceeded
+  - Retry-After header indicates wait time
+
+UC-TECH-012: Production Database Pooling
+-----------------------------------------
+Description: Optimized database connection management
+Configuration:
+  - Maximum connections: 10
+  - Idle timeout: 20 seconds
+  - Connection timeout: 10 seconds
+Benefits:
+  - Efficient connection reuse
+  - Prevents connection exhaustion
+  - Automatic idle connection cleanup
+
+================================================================================
+13. COMPLETE API ENDPOINTS REFERENCE
+================================================================================
+
+FORMAT: All endpoints use POST to /trpc/<router>.<procedure>
+
+AUTHENTICATION ROUTER (auth.*)
+------------------------------
+✓ auth.login                    - Authenticate user
+✓ auth.logout                   - End user session
+✓ auth.current                  - Get current user info
+
+USER ROUTER (users.*)
+---------------------
+✓ users.create                  - Create new user
+✓ users.update                  - Update own profile
+✓ users.adminUpdate            - Admin update any user
+✓ users.delete                  - Delete user
+
+PRODUCT ROUTER (product.*)
+--------------------------
+✓ product.create                - Create product
+✓ product.getAll                - List all products
+✓ product.getById               - Get product details
+✓ product.update                - Update product
+✓ product.delete                - Delete product
+✓ product.getPriceHistory       - View price changes (admin)
+✓ product.getCostAnalysis       - Analyze product costs (admin)
+
+CATEGORY ROUTER (category.*)
+----------------------------
+✓ category.create               - Create category
+✓ category.getAll               - List all categories
+✓ category.update               - Update category
+✓ category.delete               - Delete category
+
+LOCATION ROUTER (location.*)
+----------------------------
+✓ location.create               - Create location (admin)
+✓ location.getAll               - List all locations
+✓ location.getById              - Get location details
+✓ location.update               - Update location (admin)
+✓ location.delete               - Delete location (admin)
+
+SUPPLIER ROUTER (supplier.*)
+----------------------------
+✓ supplier.create               - Create supplier
+✓ supplier.getAll               - List all suppliers
+✓ supplier.getById              - Get supplier details
+✓ supplier.update               - Update supplier
+✓ supplier.delete               - Delete supplier
+
+STOCK ROUTER (stock.*)
+----------------------
+✓ stock.create                  - Initialize stock record
+✓ stock.getAll                  - List all stock
+✓ stock.getById                 - Get stock details
+✓ stock.adjust                  - Adjust quantity
+✓ stock.transfer                - Transfer between locations (admin)
+✓ stock.setMinimumLevel         - Set reorder threshold (admin)
+
+STOCK MOVEMENT ROUTER (stockMovement.*)
+---------------------------------------
+✓ stockMovement.getAll          - View all movements (admin)
+✓ stockMovement.getByProduct    - Movements for product (admin)
+✓ stockMovement.getByLocation   - Movements at location (admin)
+
+PURCHASE ORDER ROUTER (purchaseOrder.*)
+---------------------------------------
+✓ purchaseOrder.create          - Create new PO with initial item
+✓ purchaseOrder.getAll          - List all POs
+✓ purchaseOrder.getById         - Get PO details
+✓ purchaseOrder.update          - Update PO status
+✓ purchaseOrder.delete          - Delete PO
+✓ purchaseOrder.addItem         - Add item to PO
+✓ purchaseOrder.updateItem      - Update item in PO
+✓ purchaseOrder.removeItem      - Remove item from PO
+✓ purchaseOrder.generateEmail   - Generate supplier email
+
+REPORT ROUTER (report.*)
+------------------------
+✓ report.lowStock               - Items below minimum
+✓ report.inventoryValuation     - Total inventory value (admin)
+✓ report.purchaseOrderSummary   - PO metrics
+✓ report.supplierPerformance    - Supplier analytics
+
+HEALTH CHECK ENDPOINTS (Non-tRPC)
+---------------------------------
+✓ GET /health                   - Liveness check
+✓ GET /ready                    - Readiness check (DB connectivity)
+
+TOTAL: 50 tRPC procedures + 2 health endpoints
+
+================================================================================
+14. DATABASE SCHEMA OVERVIEW
+================================================================================
+
+CORE TABLES (12):
+----------------
+
+1. users
+   - User accounts with authentication
+   - Fields: id, name, lastName, email, password, role, status
+   - Roles: ADMIN, USER
+   - Status: ACTIVE, INACTIVE
+
+2. category
+   - Product categories
+   - Fields: id, name (unique), description
+
+3. location
+   - Warehouse/storage locations
+   - Fields: id, name, address, city, state, country, latitude, longitude
+   - Supports soft delete with deletedBy user reference
+
+4. supplier
+   - Supplier information
+   - Fields: id, name, contact_name, phone, email, delivery_days,
+             free_shipping_minimum, supplier_type
+
+5. product
+   - Base product information
+   - Fields: id, sku (unique), name, unit (array), category_id, supplier_id,
+             activeVersionId
+   - Relations: belongs to Category, Supplier; has many ProductVersions
+
+6. product_version
+   - Product pricing and description history
+   - Fields: id, productId, versionNumber, costPrice, sellingPrice, description
+   - Relations: belongs to Product
+   - Purpose: Historical tracking
+
+7. stock
+   - Current inventory levels
+   - Fields: id, location_id, productId, qty, minimumStockLevel
+   - Unique constraint: (location_id, productId)
+   - Relations: belongs to Location and Product
+
+8. stock_movement
+   - Inventory change audit log
+   - Fields: id, product_id, location_id, change_qty, reason, user_id
+   - Relations: belongs to User, Location, Product
+
+9. purchase_order
+   - Purchase orders
+   - Fields: id, supplier_id, destination_location_id, status
+   - Status: DRAFT, PENDING_APPROVAL, APPROVED, ORDERED, RECEIVED,
+             REJECTED, CANCELLED
+   - Relations: belongs to Supplier, Location; has many PurchaseOrderItems
+
+10. purchase_order_item
+    - Line items in purchase orders
+    - Fields: id, purchase_order_id, product_id, qty, unit_price
+    - Relations: belongs to PurchaseOrder and Product
+
+11. purchase_order_audit_log
+    - PO change audit trail
+    - Fields: id, purchaseOrderId, userId, fieldChanged, oldValue,
+              newValue, reason
+    - Relations: belongs to PurchaseOrder and User
+
+12. po_counter
+    - Sequential PO number generator (per year)
+    - Fields: id, year, last_sequence, createdAt, updatedAt
+    - Purpose: Generates unique PO numbers in format PO-YYYY-XXX
+    - Incremented automatically when new PO created each year
+
+RELATIONSHIPS:
+-------------
+Product → ProductVersion (one-to-many, cascade delete)
+Product → Category (many-to-one, set null on delete)
+Product → Supplier (many-to-one, set null on delete)
+Location → Stock (one-to-many, cascade delete)
+Location → StockMovement (one-to-many, cascade delete)
+Stock → Product + Location (unique pair)
+PurchaseOrder → Supplier (many-to-one)
+PurchaseOrder → Location (many-to-one)
+PurchaseOrder → PurchaseOrderItem (one-to-many, cascade delete)
+User → StockMovement (one-to-many, set null on delete)
+
+================================================================================
+15. BUSINESS WORKFLOWS
+================================================================================
+
+WORKFLOW 1: Product Lifecycle
+------------------------------
+1. Create product with initial version (version 1)
+2. Product used in inventory operations
+3. Update product price → creates version 2
+4. Historical analysis uses all versions
+5. Soft delete when no longer needed
+
+WORKFLOW 2: Inventory Receiving
+--------------------------------
+1. Create purchase order (DRAFT status)
+2. Add items to PO
+3. Submit for approval (PENDING_APPROVAL)
+4. Approve PO (APPROVED status)
+5. Send to supplier (ORDERED status)
+6. Receive shipment:
+   a. Update PO status to RECEIVED
+   b. Automatically update stock levels at destination
+   c. Log stock movements for audit
+   d. Create stock records if don't exist
+
+WORKFLOW 3: Stock Transfer
+---------------------------
+1. Select product and source location
+2. Specify destination and quantity
+3. System validates sufficient stock
+4. Transaction:
+   a. Decrease source stock
+   b. Increase destination stock
+   c. Log both movements
+   d. Cross-reference in reasons
+5. Audit trail preserved
+
+WORKFLOW 4: Reorder Process
+----------------------------
+1. Run low stock report
+2. Identify items below minimum
+3. Create purchase order for needed items
+4. Follow PO workflow (above)
+5. Receive and restock
+
+WORKFLOW 5: User Onboarding
+----------------------------
+1. First user creates account (auto-ADMIN)
+2. Admin creates additional users
+3. Users login with credentials
+4. JWT token stored in secure cookie
+5. Token validates on each request
+6. Users perform role-appropriate operations
+
+WORKFLOW 6: Cost Analysis
+--------------------------
+1. Product created with initial cost
+2. Cost updated over time (creates versions)
+3. Purchase orders record actual purchase costs
+4. Run cost analysis:
+   a. Calculate average from versions
+   b. Get last actual purchase cost
+   c. Identify price trends
+   d. Compare historical data
+5. Use for pricing decisions
+
+================================================================================
+16. PRODUCTION INFRASTRUCTURE
+================================================================================
+
+ENVIRONMENT CONFIGURATION:
+--------------------------
+Required environment variables:
+- DATABASE_URL: PostgreSQL connection string
+- JWT_SECRET: Secret key for JWT signing (generate with openssl rand -base64 32)
+- PORT: Server port (default: 3030)
+- NODE_ENV: Environment (development/production)
+- ALLOWED_ORIGINS: Comma-separated list of allowed CORS origins
+- LOG_LEVEL: Logging verbosity (error, warn, info, debug)
+
+DEPLOYMENT SCRIPTS:
+------------------
+- npm run dev         - Development with hot reload (tsx watch)
+- npm run start:prod  - Production server
+- npm run g           - Generate database migrations
+- npm run m           - Run pending migrations
+
+HEALTH CHECK USAGE:
+------------------
+Kubernetes/Docker integration:
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 3030
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 3030
+
+PRODUCTION DEPENDENCIES:
+-----------------------
+- helmet (8 kB)              - HTTP security headers
+- express-rate-limit (14 kB) - Rate limiting
+- pino (34 kB)               - Structured logging
+- pino-http (8 kB)           - HTTP request logging
+
+DOCUMENTATION FILES:
+-------------------
+- DEPLOYMENT.md              - Comprehensive deployment guide (600+ lines)
+- PRODUCTION_CHECKLIST.md    - Pre-launch checklist (100+ items)
+- IMPLEMENTATION_SUMMARY.md  - Technical implementation details
+- README_PRODUCTION.md       - Quick reference guide
+- .env.example               - Environment variable template
+
+================================================================================
+BUSINESS RULES SUMMARY
+================================================================================
+
+1. SKUs must be unique across all products
+2. Stock quantities cannot be negative
+3. One stock record per product-location pair
+4. Purchase orders follow strict state machine (no invalid transitions)
+5. Terminal PO states (RECEIVED, REJECTED, CANCELLED) cannot be modified
+6. Product price changes trigger new version creation
+7. First user automatically becomes ADMIN
+8. Stock transfers require reason (minimum 3 characters)
+9. All stock movements logged with user and reason
+10. Receiving PO requires destination location
+11. Category names are unique (case-insensitive)
+12. Soft deletes preserve historical data
+13. Only ACTIVE users can login
+14. Admin role required for location management
+15. Users can only update their own profile (unless admin)
+16. PO numbers auto-generated in format PO-YYYY-XXX (unique per year)
+17. Adding/updating/removing items requires reason field (min 3 chars)
+18. Adding items to approved/ordered POs reverts them to DRAFT (user role only)
+19. All PO item changes require audit trail logging
+20. Supplier getAll supports pagination with limit/offset parameters
+21. Passwords must be 8+ characters with uppercase, lowercase, and number
+22. Rate limiting: 100 requests/15min general, 10 login attempts/15min
+23. Health endpoints must remain accessible for orchestration
+
+================================================================================
+SECURITY FEATURES
+================================================================================
+
+1. JWT Authentication
+   - 7-day token expiration
+   - HTTP-only secure cookies
+   - Signed tokens with secret key
+
+2. Password Security
+   - Bcrypt hashing with 10 salt rounds
+   - Passwords never stored in plain text
+   - Strong validation: 8+ characters, uppercase, lowercase, number required
+
+3. Role-Based Access Control
+   - Three authorization levels (public, authenticated, admin)
+   - Middleware enforcement at API layer
+
+4. Input Validation
+   - Zod schemas validate all inputs
+   - Type checking prevents injection attacks
+
+5. Audit Trails
+   - All critical changes logged
+   - User attribution on all modifications
+
+6. HTTP Security Headers (Helmet.js)
+   - X-Content-Type-Options: nosniff
+   - X-Frame-Options: DENY (clickjacking protection)
+   - X-XSS-Protection: enabled
+   - Content-Security-Policy: configured
+   - Strict-Transport-Security: enabled (HTTPS enforcement)
+
+7. Rate Limiting
+   - General: 100 requests per 15 minutes per IP
+   - Login: 10 attempts per 15 minutes per IP
+   - HTTP 429 response when exceeded
+
+8. CORS Configuration
+   - Environment-driven allowed origins (ALLOWED_ORIGINS)
+   - Credentials enabled for cookie-based auth
+   - Strict origin validation
+
+9. Cookie Security
+   - httpOnly: true (prevents XSS access)
+   - secure: true (production, HTTPS only)
+   - sameSite: strict (CSRF protection)
+
+10. Error Sanitization
+    - Internal errors hidden from clients
+    - Proper TRPCError codes returned
+    - No stack traces in production
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================
+
+For implementation details, refer to the source code:
+- Routes: /src/server/routers/
+- Controllers: /src/server/controllers/
+- Schemas: /src/db/schema/
+- Types: /src/types/
+
+System maintained by: Ventory Development Team
+Documentation Version: 1.3
+Last Updated: 2026-02-06
+
+Recent Updates (v1.3 - 2026-02-06):
+- PRODUCTION-READY: Comprehensive security, stability, and deployment hardening
+- Added: Helmet.js HTTP security headers (XSS, clickjacking, MIME sniffing protection)
+- Added: Rate limiting (100 req/15min general, 10 login/15min)
+- Added: Strong password validation (8+ chars, uppercase, lowercase, number)
+- Added: CORS environment-variable configuration (ALLOWED_ORIGINS)
+- Added: Cookie security enhancements (sameSite: strict, secure flag)
+- Added: Structured logging with Pino (JSON format for log aggregation)
+- Added: Health check endpoints (/health, /ready)
+- Added: Graceful shutdown (SIGTERM/SIGINT handlers, 10s timeout)
+- Added: Database connection pooling (max 10, idle 20s, timeout 10s)
+- Added: Error sanitization (no internal details leaked to clients)
+- Fixed: 10 controllers returning raw errors → proper TRPCError throwing
+- Added: Product soft delete schema field
+- Added: Deployment documentation (1500+ lines across 4 files)
+- Added: Pre-deployment checklist (100+ items)
+- Added: Docker and Kubernetes deployment examples
+
+Previous Updates (v1.2 - 2026-01-27):
+- Fixed: Logout endpoint now correctly uses mutation procedure type (was using query)
+- Fixed: Login after logout now properly redirects to dashboard
+- Improved: useLogin hook manually syncs Zustand auth store to prevent race conditions
+- Fixed: Corrected UC-AUTH-002 access level from "Public" to "Authenticated"
+
+Previous Updates (v1.1):
+- Added Purchase Order Item Management (add, update, remove items)
+- Added PO auto-numbering system (PO-YYYY-XXX format)
+- Added Supplier pagination support (limit, offset, pagination metadata)
+- Added po_counter table for sequential numbering
+- Added reason field requirement for audit trail logging
+- Added auto-revert to DRAFT for user modifications on approved/ordered POs
+- Updated total endpoints from 47 to 50 procedures

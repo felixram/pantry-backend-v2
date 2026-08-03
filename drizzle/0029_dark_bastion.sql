@@ -1,0 +1,1 @@
+ALTER TABLE "supplier" ADD COLUMN "preferred_order_method" varchar(20);

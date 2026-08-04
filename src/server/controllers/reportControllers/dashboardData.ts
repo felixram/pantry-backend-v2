@@ -21,6 +21,7 @@ import {
   sql,
   sum,
   count,
+  countDistinct,
   desc,
   asc,
   inArray,
@@ -89,6 +90,33 @@ export const dashboardData = authedProcedure
     const supplierBase = and(eq(Supplier.tenant_id, ctx.tenantId), isNull(Supplier.deletedAt));
     const orderBase = and(eq(PurchaseOrder.tenant_id, ctx.tenantId), isNull(PurchaseOrder.deletedAt), poLocationCond);
 
+    // Product/Supplier are tenant-wide (no location_id column), so "total items"/
+    // "active suppliers" can only be scoped to a location by inferring presence
+    // through a related table — Stock for products, PurchaseOrder for suppliers.
+    // The unfiltered "All Locations" case keeps today's plain catalog/directory
+    // counts unchanged; only a specific location selection switches query shape.
+    const stockBaseCond = and(eq(Stock.tenant_id, ctx.tenantId), isNull(Location.deletedAt), isNull(Stock.deletedAt), stockLocationCond);
+
+    const productTotalQuery = locationFilter
+      ? ctx.db.select({ value: countDistinct(Stock.productId) }).from(Stock).innerJoin(Location, eq(Stock.location_id, Location.id)).where(stockBaseCond)
+      : ctx.db.select({ value: count() }).from(Product).where(productBase);
+    const productCurrentQuery = locationFilter
+      ? ctx.db.select({ value: countDistinct(Stock.productId) }).from(Stock).innerJoin(Location, eq(Stock.location_id, Location.id)).where(and(stockBaseCond, gte(Stock.createdAt, currentMonthStart)))
+      : ctx.db.select({ value: count() }).from(Product).where(and(productBase, gte(Product.createdAt, currentMonthStart)));
+    const productPreviousQuery = locationFilter
+      ? ctx.db.select({ value: countDistinct(Stock.productId) }).from(Stock).innerJoin(Location, eq(Stock.location_id, Location.id)).where(and(stockBaseCond, gte(Stock.createdAt, previousMonthStart), lt(Stock.createdAt, currentMonthStart)))
+      : ctx.db.select({ value: count() }).from(Product).where(and(productBase, gte(Product.createdAt, previousMonthStart), lt(Product.createdAt, currentMonthStart)));
+
+    const supplierTotalQuery = locationFilter
+      ? ctx.db.select({ value: countDistinct(PurchaseOrder.supplier_id) }).from(PurchaseOrder).where(orderBase)
+      : ctx.db.select({ value: count() }).from(Supplier).where(supplierBase);
+    const supplierCurrentQuery = locationFilter
+      ? ctx.db.select({ value: countDistinct(PurchaseOrder.supplier_id) }).from(PurchaseOrder).where(and(orderBase, gte(PurchaseOrder.createdAt, currentMonthStart)))
+      : ctx.db.select({ value: count() }).from(Supplier).where(and(supplierBase, gte(Supplier.createdAt, currentMonthStart)));
+    const supplierPreviousQuery = locationFilter
+      ? ctx.db.select({ value: countDistinct(PurchaseOrder.supplier_id) }).from(PurchaseOrder).where(and(orderBase, gte(PurchaseOrder.createdAt, previousMonthStart), lt(PurchaseOrder.createdAt, currentMonthStart)))
+      : ctx.db.select({ value: count() }).from(Supplier).where(and(supplierBase, gte(Supplier.createdAt, previousMonthStart), lt(Supplier.createdAt, currentMonthStart)));
+
     // Run all optimized queries in parallel
     const [
       productTotal,
@@ -107,15 +135,15 @@ export const dashboardData = authedProcedure
       warningAlerts,
       valuationResult,
     ] = await Promise.all([
-      // 1. Product KPI: total + growth (3 lightweight count queries)
-      ctx.db.select({ value: count() }).from(Product).where(productBase),
-      ctx.db.select({ value: count() }).from(Product).where(and(productBase, gte(Product.createdAt, currentMonthStart))),
-      ctx.db.select({ value: count() }).from(Product).where(and(productBase, gte(Product.createdAt, previousMonthStart), lt(Product.createdAt, currentMonthStart))),
+      // 1. Product KPI: total + growth — location-scoped via Stock when a location is selected
+      productTotalQuery,
+      productCurrentQuery,
+      productPreviousQuery,
 
-      // 2. Supplier KPI: total + growth
-      ctx.db.select({ value: count() }).from(Supplier).where(supplierBase),
-      ctx.db.select({ value: count() }).from(Supplier).where(and(supplierBase, gte(Supplier.createdAt, currentMonthStart))),
-      ctx.db.select({ value: count() }).from(Supplier).where(and(supplierBase, gte(Supplier.createdAt, previousMonthStart), lt(Supplier.createdAt, currentMonthStart))),
+      // 2. Supplier KPI: total + growth — location-scoped via PurchaseOrder when a location is selected
+      supplierTotalQuery,
+      supplierCurrentQuery,
+      supplierPreviousQuery,
 
       // 3. Order KPI: total + growth
       ctx.db.select({ value: count() }).from(PurchaseOrder).where(orderBase),

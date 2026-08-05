@@ -67,57 +67,60 @@ export const getAllProductsProcedure = authedProcedure
       ? and(baseConditions, searchCondition)
       : baseConditions;
 
-    // Query 1: Get total count with filters (fast, single column)
-    const countResult = await ctx.db
-      .select({ count: count() })
-      .from(Product)
-      .where(whereCondition);
+    // Count + fetch run in parallel — independent queries, no need to
+    // wait for one before starting the other.
+    const [countResult, products] = await Promise.all([
+      // Total count with filters (fast, single column)
+      ctx.db
+        .select({ count: count() })
+        .from(Product)
+        .where(whereCondition),
 
-    const totalCount = Number(countResult[0]?.count ?? 0);
-
-    // Query 2: Get paginated products with ONLY specific columns
-    const products = await ctx.db.query.Product.findMany({
-      where: whereCondition,
-      // ONLY fetch what we need from the main table
-      columns: {
-        id: true,
-        sku: true,
-        name: true,
-        unit: true,
-        defaultUnit: true,
-        category_id: true,
-        supplier_id: true,
-        tax_rate_id: true,
-        is_tax_exempt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      with: {
-        supplier: {
-          columns: { id: true, name: true }, // not fetch supplier address, phone, etc.
+      // Paginated products with ONLY specific columns
+      ctx.db.query.Product.findMany({
+        where: whereCondition,
+        // ONLY fetch what we need from the main table
+        columns: {
+          id: true,
+          sku: true,
+          name: true,
+          unit: true,
+          defaultUnit: true,
+          category_id: true,
+          supplier_id: true,
+          tax_rate_id: true,
+          is_tax_exempt: true,
+          createdAt: true,
+          updatedAt: true,
         },
-        category: {
-          columns: { id: true, name: true, tax_rate_id: true, is_tax_exempt: true },
-        },
-        version: {
-          columns: {
-            id: true,
-            costPrice: true,
-            costPriceUnit: true,
-            sellingPrice: true,
-            sellingPriceUnit: true,
-            description: true,
+        with: {
+          supplier: {
+            columns: { id: true, name: true }, // not fetch supplier address, phone, etc.
+          },
+          category: {
+            columns: { id: true, name: true, tax_rate_id: true, is_tax_exempt: true },
+          },
+          version: {
+            columns: {
+              id: true,
+              costPrice: true,
+              costPriceUnit: true,
+              sellingPrice: true,
+              sellingPriceUnit: true,
+              description: true,
+            },
+          },
+          unitConversions: {
+            columns: { id: true, unit_name: true, conversion_factor: true, is_base_unit: true, is_purchasable: true },
           },
         },
-        unitConversions: {
-          columns: { id: true, unit_name: true, conversion_factor: true, is_base_unit: true, is_purchasable: true },
-        },
-      },
-      limit: input.limit,
-      offset: offset,
-      orderBy: (product, { asc }) => [asc(product.name)],
-    });
+        limit: input.limit,
+        offset: offset,
+        orderBy: (product, { asc }) => [asc(product.name)],
+      }),
+    ]);
 
+    const totalCount = Number(countResult[0]?.count ?? 0);
     const totalPages = Math.ceil(totalCount / input.limit);
     const currentPage = Math.floor(offset / input.limit) + 1;
 

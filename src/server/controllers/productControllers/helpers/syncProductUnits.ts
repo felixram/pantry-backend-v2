@@ -1,9 +1,12 @@
 import type { ExtractTablesWithRelations } from "drizzle-orm";
 import type { PgTransaction } from "drizzle-orm/pg-core";
 import type { PostgresJsQueryResultHKT } from "drizzle-orm/postgres-js";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull, notInArray } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { Product } from "../../../../db/schema/product.ts";
+import { ProductVersion } from "../../../../db/schema/productVersion.ts";
 import { ProductUnitConversion } from "../../../../db/schema/productUnitConversion.ts";
+import { Stock } from "../../../../db/schema/stock.ts";
 import * as schema from "../../../../db/schema/index.ts";
 
 type TransactionContext = PgTransaction<
@@ -30,6 +33,17 @@ export interface UnitConversionInput {
  * Takes the full desired conversions list (not a diff): replaces all
  * existing ProductUnitConversion rows for the product, then derives
  * Product.unit from exactly what was just written.
+ *
+ * Also enforces two invariants for whatever still references a unit that's
+ * about to disappear:
+ *  - the product's active ProductVersion's costPriceUnit/sellingPriceUnit
+ *    can't be silently orphaned (blocks the removal instead)
+ *  - any Stock.display_unit pointing at a removed unit is cleared
+ *
+ * Callers that also change the active version's price units in the same
+ * request (create/update) must create/repoint the version BEFORE calling
+ * this, so the guard below checks the version that will actually be active
+ * — not a stale one — and doesn't false-positive-block a combined edit.
  */
 export async function syncProductUnits(
   tx: TransactionContext,
@@ -47,6 +61,33 @@ export async function syncProductUnits(
     conversions.length > 0 && !conversions.some((c) => c.is_base_unit)
       ? conversions.map((c, i) => ({ ...c, is_base_unit: i === 0 }))
       : conversions;
+  const newUnitNames = normalized.map((c) => c.unit_name);
+
+  // A unit still referenced by the active version's price fields can't
+  // disappear out from under it — allUnitPrices() would silently return
+  // null (no error) and the product's price would vanish from every list.
+  const product = await tx.query.Product.findFirst({
+    where: eq(Product.id, productId),
+    columns: { activeVersionId: true },
+  });
+  if (product?.activeVersionId) {
+    const version = await tx.query.ProductVersion.findFirst({
+      where: eq(ProductVersion.id, product.activeVersionId),
+      columns: { costPriceUnit: true, sellingPriceUnit: true },
+    });
+    if (version?.costPriceUnit && !newUnitNames.includes(version.costPriceUnit)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Cannot remove unit "${version.costPriceUnit}" — it's currently set as this product's cost price unit. Change the cost price unit first.`,
+      });
+    }
+    if (version?.sellingPriceUnit && !newUnitNames.includes(version.sellingPriceUnit)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Cannot remove unit "${version.sellingPriceUnit}" — it's currently set as this product's selling price unit. Change the selling price unit first.`,
+      });
+    }
+  }
 
   await tx
     .delete(ProductUnitConversion)
@@ -65,8 +106,26 @@ export async function syncProductUnits(
     );
   }
 
-  await tx
-    .update(Product)
-    .set({ unit: normalized.map((c) => c.unit_name) })
-    .where(eq(Product.id, productId));
+  await tx.update(Product).set({ unit: newUnitNames }).where(eq(Product.id, productId));
+
+  // Stale Stock.display_unit values (referencing a unit that no longer
+  // exists for this product) get cleared rather than left dangling — every
+  // read site already falls back gracefully when display_unit is null.
+  if (newUnitNames.length === 0) {
+    await tx
+      .update(Stock)
+      .set({ display_unit: null })
+      .where(and(eq(Stock.productId, productId), isNotNull(Stock.display_unit)));
+  } else {
+    await tx
+      .update(Stock)
+      .set({ display_unit: null })
+      .where(
+        and(
+          eq(Stock.productId, productId),
+          isNotNull(Stock.display_unit),
+          notInArray(Stock.display_unit, newUnitNames),
+        ),
+      );
+  }
 }

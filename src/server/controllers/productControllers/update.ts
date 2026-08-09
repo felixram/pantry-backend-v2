@@ -54,7 +54,7 @@ export const updateProductProcedure = authedMutation
         });
       }
 
-      // Update core product fields (supplier, category, unit)
+      // Update core product fields (supplier, category, etc.)
       const productUpdates: Record<string, any> = {};
       if (input.name) {
         productUpdates.name = input.name;
@@ -84,39 +84,12 @@ export const updateProductProcedure = authedMutation
           .where(eq(Product.id, input.productId));
       }
 
-      // Sync unit conversion entries (+ Product.unit) when the unit array is
-      // updated. Surviving units keep their existing factor/base/purchasable;
-      // brand-new units get defaults. syncProductUnits is the only place
-      // that actually writes ProductUnitConversion or Product.unit.
-      if (input.unit) {
-        const existingConversions = await tx.query.ProductUnitConversion.findMany({
-          where: and(
-            eq(ProductUnitConversion.product_id, input.productId),
-            eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
-          ),
-        });
-        const existingByName = new Map(existingConversions.map((c) => [c.unit_name, c]));
-
-        const targetConversions = input.unit.map((unitName) => {
-          const existing = existingByName.get(unitName);
-          return existing
-            ? {
-                unit_name: unitName,
-                conversion_factor: existing.conversion_factor,
-                is_base_unit: existing.is_base_unit,
-                is_purchasable: existing.is_purchasable,
-              }
-            : { unit_name: unitName, conversion_factor: 1, is_base_unit: false, is_purchasable: true };
-        });
-
-        await syncProductUnits(tx, {
-          productId: input.productId,
-          tenantId: ctx.tenantId!,
-          conversions: targetConversions,
-        });
-      }
-
-      // Get latest version for price/description updates
+      // Version (price/description) changes must land — and activeVersionId
+      // repoint to it — BEFORE the unit-sync block below: syncProductUnits's
+      // internal price-unit guard reads whatever version is active *right
+      // now* in this transaction. Doing this first means a single request
+      // that changes both costPriceUnit and unit together is checked against
+      // its own new costPriceUnit, not a stale one about to be replaced.
       const [latest] = await tx
         .select()
         .from(ProductVersion)
@@ -180,6 +153,40 @@ export const updateProductProcedure = authedMutation
             activeVersionId: newVersion?.id,
           })
           .where(eq(Product.id, input.productId));
+      }
+
+      // Sync unit conversion entries (+ Product.unit) when the unit array is
+      // updated. Surviving units keep their existing factor/base/purchasable;
+      // brand-new units get defaults. syncProductUnits is the only place
+      // that actually writes ProductUnitConversion or Product.unit, and it
+      // also guards against orphaning the (now-current) version's price
+      // units and clears any stale Stock.display_unit values.
+      if (input.unit) {
+        const existingConversions = await tx.query.ProductUnitConversion.findMany({
+          where: and(
+            eq(ProductUnitConversion.product_id, input.productId),
+            eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
+          ),
+        });
+        const existingByName = new Map(existingConversions.map((c) => [c.unit_name, c]));
+
+        const targetConversions = input.unit.map((unitName) => {
+          const existing = existingByName.get(unitName);
+          return existing
+            ? {
+                unit_name: unitName,
+                conversion_factor: existing.conversion_factor,
+                is_base_unit: existing.is_base_unit,
+                is_purchasable: existing.is_purchasable,
+              }
+            : { unit_name: unitName, conversion_factor: 1, is_base_unit: false, is_purchasable: true };
+        });
+
+        await syncProductUnits(tx, {
+          productId: input.productId,
+          tenantId: ctx.tenantId!,
+          conversions: targetConversions,
+        });
       }
 
       return {

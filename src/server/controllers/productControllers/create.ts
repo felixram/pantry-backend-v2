@@ -135,30 +135,32 @@ export const createProductProcedure = authedMutation
           })
           .returning({ id: ProductVersion.id });
 
-        // Independent of each other — run in parallel rather than sequentially.
-        await Promise.all([
-          newVersion && newProduct
-            ? tx.update(Product).set({ activeVersionId: newVersion.id }).where(eq(Product.id, newProduct.id))
-            : Promise.resolve(),
-          newProduct && input.unit.length > 0
-            ? (() => {
-                const conversionsMap = new Map((input.unitConversions ?? []).map((c) => [c.unit_name, c]));
-                return syncProductUnits(tx, {
-                  productId: newProduct.id,
-                  tenantId: ctx.tenantId!,
-                  conversions: input.unit.map((unit, index) => {
-                    const provided = conversionsMap.get(unit);
-                    return {
-                      unit_name: unit,
-                      conversion_factor: provided?.conversion_factor ?? 1,
-                      is_base_unit: provided?.is_base_unit ?? index === 0,
-                      is_purchasable: provided?.is_purchasable ?? true,
-                    };
-                  }),
-                });
-              })()
-            : Promise.resolve(),
-        ]);
+        // Must repoint activeVersionId to the new version BEFORE calling
+        // syncProductUnits: its internal price-unit guard reads whatever
+        // version is currently active, so it needs to see this one (with
+        // this request's costPriceUnit/sellingPriceUnit), not stay pointed
+        // at nothing/stale — otherwise a product created with units AND a
+        // costPriceUnit together could false-positive-block itself.
+        if (newVersion && newProduct) {
+          await tx.update(Product).set({ activeVersionId: newVersion.id }).where(eq(Product.id, newProduct.id));
+        }
+
+        if (newProduct && input.unit.length > 0) {
+          const conversionsMap = new Map((input.unitConversions ?? []).map((c) => [c.unit_name, c]));
+          await syncProductUnits(tx, {
+            productId: newProduct.id,
+            tenantId: ctx.tenantId!,
+            conversions: input.unit.map((unit, index) => {
+              const provided = conversionsMap.get(unit);
+              return {
+                unit_name: unit,
+                conversion_factor: provided?.conversion_factor ?? 1,
+                is_base_unit: provided?.is_base_unit ?? index === 0,
+                is_purchasable: provided?.is_purchasable ?? true,
+              };
+            }),
+          });
+        }
 
         return {
           message: "Product created",

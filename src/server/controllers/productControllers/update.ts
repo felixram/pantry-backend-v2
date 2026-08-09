@@ -1,10 +1,11 @@
 import z from "zod";
 import { authedMutation, t } from "../../trpc.ts";
-import { and, eq, inArray, type InferInsertModel } from "drizzle-orm";
+import { and, eq, type InferInsertModel } from "drizzle-orm";
 import { Product } from "../../../db/schema/product.ts";
 import { TRPCError } from "@trpc/server";
 import { ProductVersion } from "../../../db/schema/productVersion.ts";
 import { ProductUnitConversion } from "../../../db/schema/productUnitConversion.ts";
+import { syncProductUnits } from "./helpers/syncProductUnits.ts";
 
 export const updateProductProcedure = authedMutation
   .input(
@@ -58,9 +59,8 @@ export const updateProductProcedure = authedMutation
       if (input.name) {
         productUpdates.name = input.name;
       }
-      if (input.unit) {
-        productUpdates.unit = input.unit;
-      }
+      // Product.unit is not set here — syncProductUnits below is the only
+      // thing that writes it, derived from the conversions it writes.
       if (input.supplier_id) {
         productUpdates.supplier_id = input.supplier_id;
       }
@@ -84,70 +84,36 @@ export const updateProductProcedure = authedMutation
           .where(eq(Product.id, input.productId));
       }
 
-      // Sync unit conversion entries when unit array is updated
+      // Sync unit conversion entries (+ Product.unit) when the unit array is
+      // updated. Surviving units keep their existing factor/base/purchasable;
+      // brand-new units get defaults. syncProductUnits is the only place
+      // that actually writes ProductUnitConversion or Product.unit.
       if (input.unit) {
-        const existingConversions =
-          await tx.query.ProductUnitConversion.findMany({
-            where: and(
-              eq(ProductUnitConversion.product_id, input.productId),
-              eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
-            ),
-          });
+        const existingConversions = await tx.query.ProductUnitConversion.findMany({
+          where: and(
+            eq(ProductUnitConversion.product_id, input.productId),
+            eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
+          ),
+        });
+        const existingByName = new Map(existingConversions.map((c) => [c.unit_name, c]));
 
-        const existingUnitNames = existingConversions.map((c) => c.unit_name);
-        const newUnitNames = input.unit;
+        const targetConversions = input.unit.map((unitName) => {
+          const existing = existingByName.get(unitName);
+          return existing
+            ? {
+                unit_name: unitName,
+                conversion_factor: existing.conversion_factor,
+                is_base_unit: existing.is_base_unit,
+                is_purchasable: existing.is_purchasable,
+              }
+            : { unit_name: unitName, conversion_factor: 1, is_base_unit: false, is_purchasable: true };
+        });
 
-        // Units to add: in new array but not in existing
-        const unitsToAdd = newUnitNames.filter(
-          (u) => !existingUnitNames.includes(u),
-        );
-
-        // Conversions to remove: in existing but not in new array
-        const conversionsToRemove = existingConversions.filter(
-          (c) => !newUnitNames.includes(c.unit_name),
-        );
-
-        // Insert new conversions
-        if (unitsToAdd.length > 0) {
-          await tx.insert(ProductUnitConversion).values(
-            unitsToAdd.map((unit) => ({
-              product_id: input.productId,
-              tenant_id: ctx.tenantId!,
-              unit_name: unit,
-              conversion_factor: 1,
-              is_base_unit: false,
-            })),
-          );
-        }
-
-        // Delete removed conversions
-        if (conversionsToRemove.length > 0) {
-          await tx
-            .delete(ProductUnitConversion)
-            .where(
-              inArray(
-                ProductUnitConversion.id,
-                conversionsToRemove.map((c) => c.id),
-              ),
-            );
-        }
-
-        // Ensure a base unit exists among remaining conversions
-        const remainingConversions =
-          await tx.query.ProductUnitConversion.findMany({
-            where: and(
-              eq(ProductUnitConversion.product_id, input.productId),
-              eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
-            ),
-          });
-
-        const hasBaseUnit = remainingConversions.some((c) => c.is_base_unit);
-        if (!hasBaseUnit && remainingConversions.length > 0) {
-          await tx
-            .update(ProductUnitConversion)
-            .set({ is_base_unit: true })
-            .where(eq(ProductUnitConversion.id, remainingConversions[0]!.id));
-        }
+        await syncProductUnits(tx, {
+          productId: input.productId,
+          tenantId: ctx.tenantId!,
+          conversions: targetConversions,
+        });
       }
 
       // Get latest version for price/description updates

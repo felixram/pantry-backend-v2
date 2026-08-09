@@ -3,12 +3,12 @@ import { authedMutation } from "../../trpc.ts";
 import { and, eq, isNull } from "drizzle-orm";
 import { Product } from "../../../db/schema/product.ts";
 import { ProductVersion } from "../../../db/schema/productVersion.ts";
-import { ProductUnitConversion } from "../../../db/schema/productUnitConversion.ts";
 import { Supplier } from "../../../db/schema/supplier.ts";
 import { Category } from "../../../db/schema/category.ts";
 import { TaxRate } from "../../../db/schema/taxRate.ts";
 import { TRPCError } from "@trpc/server";
 import { handleDbError } from "../../../utils/dbErrors.ts";
+import { syncProductUnits } from "./helpers/syncProductUnits.ts";
 
 export const createProductProcedure = authedMutation
   .input(
@@ -110,7 +110,10 @@ export const createProductProcedure = authedMutation
           .values({
             name: input.name,
             sku: input.sku ?? null,
-            unit: input.unit ?? [],
+            // Placeholder to satisfy NOT NULL — syncProductUnits below is the
+            // only thing that actually derives this column, from whatever
+            // conversions end up written.
+            unit: [],
             supplier_id: input.supplier_id ?? null,
             category_id: input.category_id ?? null,
             tax_rate_id: input.tax_rate_id ?? null,
@@ -140,19 +143,19 @@ export const createProductProcedure = authedMutation
           newProduct && input.unit.length > 0
             ? (() => {
                 const conversionsMap = new Map((input.unitConversions ?? []).map((c) => [c.unit_name, c]));
-                return tx.insert(ProductUnitConversion).values(
-                  input.unit.map((unit, index) => {
+                return syncProductUnits(tx, {
+                  productId: newProduct.id,
+                  tenantId: ctx.tenantId!,
+                  conversions: input.unit.map((unit, index) => {
                     const provided = conversionsMap.get(unit);
                     return {
-                      product_id: newProduct.id,
-                      tenant_id: ctx.tenantId!,
                       unit_name: unit,
                       conversion_factor: provided?.conversion_factor ?? 1,
-                      is_base_unit: provided?.is_base_unit ?? (index === 0),
+                      is_base_unit: provided?.is_base_unit ?? index === 0,
                       is_purchasable: provided?.is_purchasable ?? true,
                     };
-                  })
-                );
+                  }),
+                });
               })()
             : Promise.resolve(),
         ]);

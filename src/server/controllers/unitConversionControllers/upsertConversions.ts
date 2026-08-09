@@ -1,9 +1,7 @@
 import z from "zod"
 import { authedMutation } from "../../trpc.ts"
-import { ProductUnitConversion } from "../../../db/schema/productUnitConversion.ts"
-import { Product } from "../../../db/schema/product.ts"
-import { eq, and } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
+import { syncProductUnits } from "../productControllers/helpers/syncProductUnits.ts"
 
 export const upsertConversionsProcedure = authedMutation
   .input(
@@ -57,33 +55,11 @@ export const upsertConversionsProcedure = authedMutation
     }
 
     return await ctx.db.transaction(async (tx) => {
-      // Delete all existing conversions for this product and tenant
-      await tx
-        .delete(ProductUnitConversion)
-        .where(
-          and(
-            eq(ProductUnitConversion.product_id, input.product_id),
-            eq(ProductUnitConversion.tenant_id, ctx.tenantId!)
-          )
-        )
-
-      // Insert all new conversions
-      await tx.insert(ProductUnitConversion).values(
-        input.conversions.map((c) => ({
-          product_id: input.product_id,
-          tenant_id: ctx.tenantId!,
-          unit_name: c.unit_name,
-          conversion_factor: c.conversion_factor,
-          is_base_unit: c.is_base_unit,
-          is_purchasable: c.is_purchasable,
-        }))
-      )
-
-      // Sync the Product's unit array
-      await tx
-        .update(Product)
-        .set({ unit: unitNames })
-        .where(eq(Product.id, input.product_id))
+      await syncProductUnits(tx, {
+        productId: input.product_id,
+        tenantId: ctx.tenantId!,
+        conversions: input.conversions,
+      })
 
       return {
         message: "Unit conversions updated",

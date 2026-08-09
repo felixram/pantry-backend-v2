@@ -37,6 +37,7 @@ export const getDeletedProductsProcedure = authedProcedure.query(async ({ ctx })
   // deleted it without a separate round trip to the Activity log.
   const deleteEvents = await ctx.db.query.ProductAudit.findMany({
     where: and(
+      eq(ProductAudit.tenant_id, ctx.tenantId),
       inArray(
         ProductAudit.productId,
         products.map((product) => product.id)

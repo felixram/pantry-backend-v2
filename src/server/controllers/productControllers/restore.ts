@@ -1,6 +1,7 @@
 import z from "zod";
 import { adminMutation } from "../../trpc.ts";
 import { Product } from "../../../db/schema/product.ts";
+import { ProductAudit } from "../../../db/schema/productAudit.ts";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { PRODUCT_RESTORE_WINDOW_MS } from "./helpers/purgeExpiredProducts.ts";
@@ -21,7 +22,7 @@ export const restoreProductProcedure = adminMutation
 
     const product = await ctx.db.query.Product.findFirst({
       where: and(eq(Product.id, input.productId), eq(Product.tenant_id, ctx.tenantId), isNotNull(Product.deletedAt)),
-      columns: { id: true, deletedAt: true },
+      columns: { id: true, name: true, sku: true, deletedAt: true },
     });
 
     if (!product) {
@@ -39,7 +40,17 @@ export const restoreProductProcedure = adminMutation
       });
     }
 
-    await ctx.db.update(Product).set({ deletedAt: null }).where(eq(Product.id, input.productId));
+    await ctx.db.transaction(async (tx) => {
+      await tx.update(Product).set({ deletedAt: null }).where(eq(Product.id, input.productId));
+      await tx.insert(ProductAudit).values({
+        productId: input.productId,
+        productName: product.name,
+        productSku: product.sku,
+        tenant_id: ctx.tenantId!,
+        action: "restored",
+        userId: ctx.user!.id,
+      });
+    });
 
     return { message: "Product restored successfully." };
   });

@@ -1,6 +1,7 @@
 import z from "zod";
 import { adminMutation } from "../../trpc.ts";
 import { Product } from "../../../db/schema/product.ts";
+import { ProductAudit } from "../../../db/schema/productAudit.ts";
 import { Stock } from "../../../db/schema/stock.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { and, eq, gt, isNull } from "drizzle-orm";
@@ -35,7 +36,7 @@ export const deleteProductProcedure = adminMutation
     // instead of silently "succeeding" again.
     const existingProduct = await ctx.db.query.Product.findFirst({
       where: and(eq(Product.id, input.productId), eq(Product.tenant_id, ctx.tenantId), isNull(Product.deletedAt)),
-      columns: { id: true },
+      columns: { id: true, name: true, sku: true },
     });
 
     if (!existingProduct) {
@@ -92,7 +93,17 @@ export const deleteProductProcedure = adminMutation
       });
     }
 
-    await ctx.db.update(Product).set({ deletedAt: new Date() }).where(eq(Product.id, input.productId));
+    await ctx.db.transaction(async (tx) => {
+      await tx.update(Product).set({ deletedAt: new Date() }).where(eq(Product.id, input.productId));
+      await tx.insert(ProductAudit).values({
+        productId: input.productId,
+        productName: existingProduct.name,
+        productSku: existingProduct.sku,
+        tenant_id: ctx.tenantId!,
+        action: "deleted",
+        userId: ctx.user!.id,
+      });
+    });
 
     return { message: "Product deleted successfully." };
   });

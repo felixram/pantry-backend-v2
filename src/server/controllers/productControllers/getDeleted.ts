@@ -1,6 +1,7 @@
 import { authedProcedure } from "../../trpc.ts";
 import { Product } from "../../../db/schema/product.ts";
-import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
+import { ProductAudit } from "../../../db/schema/productAudit.ts";
+import { and, desc, eq, gte, inArray, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { purgeExpiredDeletedProducts, PRODUCT_RESTORE_WINDOW_MS } from "./helpers/purgeExpiredProducts.ts";
 
@@ -28,5 +29,36 @@ export const getDeletedProductsProcedure = authedProcedure.query(async ({ ctx })
     orderBy: (product) => [desc(product.deletedAt)],
   });
 
-  return { products };
+  if (products.length === 0) {
+    return { products: [] };
+  }
+
+  // Latest "deleted" audit row per product, so the trash list can show who
+  // deleted it without a separate round trip to the Activity log.
+  const deleteEvents = await ctx.db.query.ProductAudit.findMany({
+    where: and(
+      inArray(
+        ProductAudit.productId,
+        products.map((product) => product.id)
+      ),
+      eq(ProductAudit.action, "deleted")
+    ),
+    columns: { productId: true, createdAt: true },
+    with: { user: { columns: { name: true } } },
+    orderBy: (auditRow) => [desc(auditRow.createdAt)],
+  });
+
+  const deletedByNameByProductId = new Map<string, string>();
+  for (const event of deleteEvents) {
+    if (event.productId && !deletedByNameByProductId.has(event.productId)) {
+      deletedByNameByProductId.set(event.productId, event.user?.name || "Unknown User");
+    }
+  }
+
+  return {
+    products: products.map((product) => ({
+      ...product,
+      deletedByName: deletedByNameByProductId.get(product.id) ?? null,
+    })),
+  };
 });

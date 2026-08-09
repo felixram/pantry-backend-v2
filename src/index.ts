@@ -22,6 +22,7 @@ import { getISOWeekIdentifier } from "./utils/dateUtils.ts"
 import { sendInventoryCountReminder } from "./services/email/emailService.ts"
 import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
 import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
+import { purgeExpiredDeletedProducts } from "./server/controllers/productControllers/helpers/purgeExpiredProducts.ts"
 
 dotenv.config()
 
@@ -200,6 +201,28 @@ app.post("/api/cron/inventory-reminder", async (req, res) => {
     return res.json({ success: true, weekIdentifier, emailsSent, emailsFailed })
   } catch (error) {
     logger.error({ error }, "Cron inventory-reminder failed")
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+// Cron endpoint: called by Railway cron every hour
+// Schedule: 0 * * * *
+// Command: curl -X POST https://your-api.railway.app/api/cron/product-purge -H "Authorization: Bearer $CRON_SECRET"
+// Hard-deletes products soft-deleted more than 24h ago that have no
+// referencing purchase-order/stock-movement/alias/invoice history; products
+// with history stay soft-deleted permanently (see purgeExpiredProducts.ts).
+app.post("/api/cron/product-purge", async (req, res) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: "Unauthorized" })
+  }
+
+  try {
+    const { checked, purged } = await purgeExpiredDeletedProducts(db)
+    logger.info({ checked, purged }, "Product purge cron completed")
+    return res.json({ success: true, checked, purged })
+  } catch (error) {
+    logger.error({ error }, "Cron product-purge failed")
     return res.status(500).json({ error: "Internal server error" })
   }
 })

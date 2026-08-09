@@ -1,5 +1,7 @@
 export * from "./create.ts"
 export * from "./delete.ts"
+export * from "./restore.ts"
+export * from "./getDeleted.ts"
 export * from "./getAll.ts"
 export * from "./update.ts"
 export * from "./getById.ts"

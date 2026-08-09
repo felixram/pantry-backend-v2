@@ -1,6 +1,8 @@
 import {
   createProductProcedure,
   deleteProductProcedure,
+  restoreProductProcedure,
+  getDeletedProductsProcedure,
   getAllProductsProcedure,
   updateProductProcedure,
   getProductById,
@@ -17,6 +19,8 @@ export const productRouter = t.router({
   getById: getProductById,
   update: updateProductProcedure,
   delete: deleteProductProcedure,
+  restore: restoreProductProcedure,
+  getDeleted: getDeletedProductsProcedure,
   getPriceHistory: getProductPriceHistory,
   getCostAnalysis: getProductCostAnalysis,
   getPricing: getProductPricingProcedure,

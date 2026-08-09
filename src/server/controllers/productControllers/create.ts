@@ -1,10 +1,14 @@
 import z from "zod";
-import { authedMutation, t } from "../../trpc.ts";
+import { authedMutation } from "../../trpc.ts";
 import { and, eq, isNull } from "drizzle-orm";
 import { Product } from "../../../db/schema/product.ts";
 import { ProductVersion } from "../../../db/schema/productVersion.ts";
 import { ProductUnitConversion } from "../../../db/schema/productUnitConversion.ts";
+import { Supplier } from "../../../db/schema/supplier.ts";
+import { Category } from "../../../db/schema/category.ts";
+import { TaxRate } from "../../../db/schema/taxRate.ts";
 import { TRPCError } from "@trpc/server";
+import { handleDbError } from "../../../utils/dbErrors.ts";
 
 export const createProductProcedure = authedMutation
   .input(
@@ -37,23 +41,6 @@ export const createProductProcedure = authedMutation
       });
     }
 
-    // Check for existing product with same SKU within this tenant
-    const existingProduct = input.sku
-      ? await ctx.db.query.Product.findFirst({
-          where: and(
-            eq(Product.sku, input.sku),
-            eq(Product.tenant_id, ctx.tenantId),
-            isNull(Product.deletedAt)
-          ),
-        })
-      : null;
-
-    if (existingProduct)
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "This product already exists",
-      });
-
     // Validate price units exist in the unit array
     if (input.costPriceUnit && !input.unit.includes(input.costPriceUnit)) {
       throw new TRPCError({
@@ -68,65 +55,117 @@ export const createProductProcedure = authedMutation
       });
     }
 
-    return await ctx.db.transaction(async (tx) => {
-      const [newProduct] = await tx
-        .insert(Product)
-        .values({
-          name: input.name,
-          sku: input.sku ?? null,
-          unit: input.unit ?? [],
-          supplier_id: input.supplier_id ?? null,
-          category_id: input.category_id ?? null,
-          tax_rate_id: input.tax_rate_id ?? null,
-          is_tax_exempt: input.is_tax_exempt ?? false,
-          tenant_id: ctx.tenantId!,
-        })
-        .returning({ id: Product.id });
-
-      const [newVersion] = await tx
-        .insert(ProductVersion)
-        .values({
-          productId: newProduct?.id,
-          versionNumber: 1,
-          costPrice: input.costPrice ?? 0.0,
-          costPriceUnit: input.costPriceUnit ?? null,
-          sellingPrice: input.sellingPrice ?? null,
-          sellingPriceUnit: input.sellingPriceUnit ?? null,
-          description: input.description,
-        })
-        .returning({ id: ProductVersion.id });
-
-      if (newVersion && newProduct)
-        await tx
-          .update(Product)
-          .set({ activeVersionId: newVersion.id })
-          .where(eq(Product.id, newProduct.id));
-
-      // Create unit conversion entries — use provided data if available, otherwise defaults
-      if (newProduct && input.unit.length > 0) {
-        const conversionsMap = new Map(
-          (input.unitConversions ?? []).map((c) => [c.unit_name, c])
-        );
-
-        await tx.insert(ProductUnitConversion).values(
-          input.unit.map((unit, index) => {
-            const provided = conversionsMap.get(unit);
-            return {
-              product_id: newProduct.id,
-              tenant_id: ctx.tenantId!,
-              unit_name: unit,
-              conversion_factor: provided?.conversion_factor ?? 1,
-              is_base_unit: provided?.is_base_unit ?? (index === 0),
-              is_purchasable: provided?.is_purchasable ?? true,
-            };
+    // Referenced ids must belong to this tenant — without this, a cross-tenant
+    // id (e.g. copied from another tenant's browser session) would be accepted
+    // silently, since the DB's FK constraints only check the row exists
+    // somewhere, not that it's scoped to the caller's tenant.
+    const [supplierExists, categoryExists, taxRateExists] = await Promise.all([
+      input.supplier_id
+        ? ctx.db.query.Supplier.findFirst({
+            where: and(
+              eq(Supplier.id, input.supplier_id),
+              eq(Supplier.tenant_id, ctx.tenantId),
+              isNull(Supplier.deletedAt),
+            ),
+            columns: { id: true },
           })
-        );
-      }
+        : null,
+      input.category_id
+        ? ctx.db.query.Category.findFirst({
+            where: and(eq(Category.id, input.category_id), eq(Category.tenant_id, ctx.tenantId)),
+            columns: { id: true },
+          })
+        : null,
+      input.tax_rate_id
+        ? ctx.db.query.TaxRate.findFirst({
+            where: and(
+              eq(TaxRate.id, input.tax_rate_id),
+              eq(TaxRate.tenant_id, ctx.tenantId),
+              isNull(TaxRate.deletedAt),
+            ),
+            columns: { id: true },
+          })
+        : null,
+    ]);
 
-      return {
-        message: "Product created",
-        productId: newProduct?.id,
-        versionId: newVersion?.id,
-      };
-    });
+    if (input.supplier_id && !supplierExists) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Supplier not found" });
+    }
+    if (input.category_id && !categoryExists) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Category not found" });
+    }
+    if (input.tax_rate_id && !taxRateExists) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Tax rate not found" });
+    }
+
+    // No SKU-duplicate pre-check here on purpose: a check-then-insert has a
+    // race window (two concurrent requests can both pass the check before
+    // either inserts). The partial unique index on (sku, tenant_id) is the
+    // actual source of truth; a violation is caught below and turned into
+    // the same friendly message.
+    try {
+      return await ctx.db.transaction(async (tx) => {
+        const [newProduct] = await tx
+          .insert(Product)
+          .values({
+            name: input.name,
+            sku: input.sku ?? null,
+            unit: input.unit ?? [],
+            supplier_id: input.supplier_id ?? null,
+            category_id: input.category_id ?? null,
+            tax_rate_id: input.tax_rate_id ?? null,
+            is_tax_exempt: input.is_tax_exempt ?? false,
+            tenant_id: ctx.tenantId!,
+          })
+          .returning({ id: Product.id });
+
+        const [newVersion] = await tx
+          .insert(ProductVersion)
+          .values({
+            productId: newProduct?.id,
+            versionNumber: 1,
+            costPrice: input.costPrice ?? 0.0,
+            costPriceUnit: input.costPriceUnit ?? null,
+            sellingPrice: input.sellingPrice ?? null,
+            sellingPriceUnit: input.sellingPriceUnit ?? null,
+            description: input.description,
+          })
+          .returning({ id: ProductVersion.id });
+
+        // Independent of each other — run in parallel rather than sequentially.
+        await Promise.all([
+          newVersion && newProduct
+            ? tx.update(Product).set({ activeVersionId: newVersion.id }).where(eq(Product.id, newProduct.id))
+            : Promise.resolve(),
+          newProduct && input.unit.length > 0
+            ? (() => {
+                const conversionsMap = new Map((input.unitConversions ?? []).map((c) => [c.unit_name, c]));
+                return tx.insert(ProductUnitConversion).values(
+                  input.unit.map((unit, index) => {
+                    const provided = conversionsMap.get(unit);
+                    return {
+                      product_id: newProduct.id,
+                      tenant_id: ctx.tenantId!,
+                      unit_name: unit,
+                      conversion_factor: provided?.conversion_factor ?? 1,
+                      is_base_unit: provided?.is_base_unit ?? (index === 0),
+                      is_purchasable: provided?.is_purchasable ?? true,
+                    };
+                  })
+                );
+              })()
+            : Promise.resolve(),
+        ]);
+
+        return {
+          message: "Product created",
+          productId: newProduct?.id,
+          versionId: newVersion?.id,
+        };
+      });
+    } catch (error) {
+      throw handleDbError(error, {
+        uniqueViolation: "This product already exists",
+      });
+    }
   });

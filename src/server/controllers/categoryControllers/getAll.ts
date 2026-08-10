@@ -1,7 +1,7 @@
 import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
 import { Category } from "../../../db/schema/category.ts";
-import { eq, ilike, sql, and, getTableColumns } from "drizzle-orm";
+import { eq, ilike, sql, and, isNull, getTableColumns } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 export const getAllCategoryProcedure = authedProcedure
@@ -30,6 +30,7 @@ export const getAllCategoryProcedure = authedProcedure
       .where(
         and(
           eq(Category.tenant_id, ctx.tenantId),
+          isNull(Category.deletedAt),
           input.search
             ? ilike(Category.name, `%${input.search}%`)
             : input.id

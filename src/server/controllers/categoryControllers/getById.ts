@@ -17,6 +17,7 @@ export const getByIdCategoryProcedure = authedProcedure
 
     const category = await ctx.db.query.Category.findFirst({
       where: and(eq(Category.id, input.id), eq(Category.tenant_id, ctx.tenantId)),
+      with: { taxRate: { columns: { id: true, name: true, rate: true } } },
     })
 
     if (!category)

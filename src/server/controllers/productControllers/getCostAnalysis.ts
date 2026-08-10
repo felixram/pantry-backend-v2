@@ -4,7 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { Product } from "../../../db/schema/product.ts";
 import { ProductVersion } from "../../../db/schema/productVersion.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
-import { eq, sql, desc } from "drizzle-orm";
+import { and, eq, sql, desc } from "drizzle-orm";
 
 export const getProductCostAnalysis = adminProcedure
   .input(
@@ -12,10 +12,11 @@ export const getProductCostAnalysis = adminProcedure
       product_id: z.string(),
     }),
   )
-  .mutation(async ({ ctx, input }) => {
-    // Validate product exists
+  .query(async ({ ctx, input }) => {
+    // Validate product exists — tenant-scoped, otherwise any admin/manager
+    // could pull another tenant's cost analysis by product id alone.
     const product = await ctx.db.query.Product.findFirst({
-      where: eq(Product.id, input.product_id),
+      where: and(eq(Product.id, input.product_id), eq(Product.tenant_id, ctx.tenantId!)),
       with: {
         version: true,
       },

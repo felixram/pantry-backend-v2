@@ -12,7 +12,7 @@ export const getProductById = authedProcedure
       id: z.string(),
     }),
   )
-  .mutation(async ({ ctx, input }) => {
+  .query(async ({ ctx, input }) => {
     const product = await ctx.db.query.Product.findFirst({
       where: and(eq(Product.id, input.id), eq(Product.tenant_id, ctx.tenantId!)),
       with: {

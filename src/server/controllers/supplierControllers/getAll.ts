@@ -24,11 +24,13 @@ export const getAllSupplierProcedure = authedProcedure
       })
     }
 
-    // Determine order by clause based on sortByType
+    // Determine order by clause based on sortByType. Tiebreaker is
+    // alphabetical by name (not id) — a supplier picker grouped by type but
+    // otherwise randomly ordered defeats the point of grouping it.
     const orderByClause = input.sortByType
       ? input.sortByType === "asc"
-        ? [asc(Supplier.supplier_type), desc(Supplier.id)]
-        : [desc(Supplier.supplier_type), asc(Supplier.id)]
+        ? [asc(Supplier.supplier_type), asc(Supplier.name)]
+        : [desc(Supplier.supplier_type), asc(Supplier.name)]
       : [desc(Supplier.id)]
 
     // When columns param is provided, return only requested fields (lightweight for dropdowns)

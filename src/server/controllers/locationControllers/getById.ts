@@ -21,6 +21,10 @@ export const getLocationById = authedProcedure
 
     const location = await ctx.db.query.Location.findFirst({
       where: and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId)),
+      with: {
+        defaultPurchaseTaxRate: { columns: { id: true, name: true, rate: true } },
+        defaultSalesTaxRate: { columns: { id: true, name: true, rate: true } },
+      },
     });
 
     if (!location) {

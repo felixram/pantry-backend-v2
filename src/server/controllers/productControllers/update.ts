@@ -13,22 +13,29 @@ export const updateProductProcedure = authedMutation
       productId: z.uuid(),
       name: z.string().optional(),
       unit: z.array(z.string()).optional(),
-      price: z.number().optional(),
+      costPrice: z.number().optional(),
       costPriceUnit: z.string().nullable().optional(),
       sellingPrice: z.number().optional(),
       sellingPriceUnit: z.string().nullable().optional(),
       description: z.string().optional(),
       defaultUnit: z.string().optional(),
-      supplier_id: z.uuid().optional(),
-      category_id: z.uuid().optional(),
+      supplier_id: z.uuid().nullable().optional(),
+      category_id: z.uuid().nullable().optional(),
       tax_rate_id: z.uuid().nullable().optional(),
       is_tax_exempt: z.boolean().optional(),
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     return await ctx.db.transaction(async (tx) => {
       const existingProduct = await tx.query.Product.findFirst({
-        where: eq(Product.id, input.productId),
+        where: and(eq(Product.id, input.productId), eq(Product.tenant_id, ctx.tenantId!)),
       });
 
       if (!existingProduct)
@@ -61,10 +68,10 @@ export const updateProductProcedure = authedMutation
       }
       // Product.unit is not set here — syncProductUnits below is the only
       // thing that writes it, derived from the conversions it writes.
-      if (input.supplier_id) {
+      if (input.supplier_id !== undefined) {
         productUpdates.supplier_id = input.supplier_id;
       }
-      if (input.category_id) {
+      if (input.category_id !== undefined) {
         productUpdates.category_id = input.category_id;
       }
       if (input.defaultUnit !== undefined) {
@@ -107,12 +114,12 @@ export const updateProductProcedure = authedMutation
       const nextVersion = (latest.versionNumber ?? 0) + 1;
 
       const newProductVersion: InferInsertModel<typeof ProductVersion> = {
-        costPrice: input?.price ?? latest.costPrice,
+        costPrice: input?.costPrice ?? latest.costPrice,
         versionNumber: latest.versionNumber,
       };
 
       // Check if any version-related fields have changed
-      const priceChanged = input.price !== undefined && input.price !== latest.costPrice;
+      const priceChanged = input.costPrice !== undefined && input.costPrice !== latest.costPrice;
       const sellingPriceChanged = input.sellingPrice !== undefined && input.sellingPrice !== latest.sellingPrice;
       const descriptionChanged = input.description !== undefined && input.description !== latest.description;
       const costPriceUnitChanged = input.costPriceUnit !== undefined && input.costPriceUnit !== latest.costPriceUnit;
@@ -125,7 +132,7 @@ export const updateProductProcedure = authedMutation
         costPriceUnitChanged ||
         sellingPriceUnitChanged
       ) {
-        newProductVersion.costPrice = input?.price ?? latest.costPrice;
+        newProductVersion.costPrice = input?.costPrice ?? latest.costPrice;
         newProductVersion.costPriceUnit = input.costPriceUnit !== undefined
           ? input.costPriceUnit
           : latest.costPriceUnit;

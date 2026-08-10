@@ -9,6 +9,8 @@ export const createCategoryProcedure = authedMutation
     z.object({
       name: z.string(),
       description: z.string().optional(),
+      tax_rate_id: z.string().uuid().nullable().optional(),
+      is_tax_exempt: z.boolean().optional().default(false),
     })
   )
   .mutation(async ({ ctx, input }) => {
@@ -19,14 +21,14 @@ export const createCategoryProcedure = authedMutation
       })
     }
 
-    const { name, description } = input
+    const { name, description, tax_rate_id, is_tax_exempt } = input
 
     try {
       await ctx.db.insert(Category).values({
-        name: (
-          name.charAt(0).toUpperCase() + name.slice(1).toLowerCase()
-        ).trim(),
+        name: name.trim(),
         description: description?.trim() || null,
+        tax_rate_id: tax_rate_id ?? null,
+        is_tax_exempt,
         tenant_id: ctx.tenantId,
       })
 

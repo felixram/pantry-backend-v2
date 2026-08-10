@@ -1,5 +1,5 @@
 import { boolean, index, pgTable, text, uuid } from "drizzle-orm/pg-core"
-import { createdAt, id, updatedAt } from "../schemaHelpers.ts"
+import { createdAt, deletedAt, id, updatedAt } from "../schemaHelpers.ts"
 import { relations } from "drizzle-orm"
 import { Product } from "./product.ts"
 import { Tenant } from "./tenant.ts"
@@ -18,8 +18,9 @@ export const Category = pgTable(
     is_tax_exempt: boolean("is_tax_exempt").default(false),
     createdAt,
     updatedAt,
+    deletedAt,
   },
-  (cat) => [index().on(cat.name), index().on(cat.tenant_id)]
+  (cat) => [index().on(cat.name), index().on(cat.tenant_id), index().on(cat.deletedAt)]
 )
 
 export const CategoryRelations = relations(Category, ({ many, one }) => ({

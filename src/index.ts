@@ -24,6 +24,7 @@ import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
 import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
 import { purgeExpiredDeletedProducts } from "./server/controllers/productControllers/helpers/purgeExpiredProducts.ts"
 import { purgeExpiredDeletedSuppliers } from "./server/controllers/supplierControllers/helpers/purgeExpiredSuppliers.ts"
+import { purgeExpiredDeletedCategories } from "./server/controllers/categoryControllers/helpers/purgeExpiredCategories.ts"
 
 dotenv.config()
 
@@ -246,6 +247,29 @@ app.post("/api/cron/supplier-purge", async (req, res) => {
     return res.json({ success: true, checked, purged })
   } catch (error) {
     logger.error({ error }, "Cron supplier-purge failed")
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+// Cron endpoint: called by Railway cron every hour
+// Schedule: 0 * * * *
+// Command: curl -X POST https://your-api.railway.app/api/cron/category-purge -H "Authorization: Bearer $CRON_SECRET"
+// Hard-deletes categories soft-deleted more than 24h ago. Unlike products/
+// suppliers there's no blocking-reference scan: Product.category_id is
+// onDelete: "set null", so every expired category purges unconditionally
+// (see purgeExpiredCategories.ts).
+app.post("/api/cron/category-purge", async (req, res) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: "Unauthorized" })
+  }
+
+  try {
+    const { checked, purged } = await purgeExpiredDeletedCategories(db)
+    logger.info({ checked, purged }, "Category purge cron completed")
+    return res.json({ success: true, checked, purged })
+  } catch (error) {
+    logger.error({ error }, "Cron category-purge failed")
     return res.status(500).json({ error: "Internal server error" })
   }
 })

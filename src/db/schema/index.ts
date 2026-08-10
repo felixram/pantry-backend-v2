@@ -1,4 +1,5 @@
 export * from "./category.ts"
+export * from "./categoryAudit.ts"
 export * from "./countSortOrder.ts"
 export * from "./inventoryCountSession.ts"
 export * from "./inventoryCountEntry.ts"

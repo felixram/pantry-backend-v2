@@ -1,14 +1,22 @@
 import z from "zod"
 import { authedProcedure } from "../../trpc.ts"
 import { Category } from "../../../db/schema/category.ts"
-import { eq, and } from "drizzle-orm"
+import { Product } from "../../../db/schema/product.ts"
+import { eq, and, count } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 
 export const getByIdCategoryProcedure = authedProcedure
   .input(z.object({ id: z.string() }))
-  .mutation(async ({ ctx, input }) => {
+  .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
     const category = await ctx.db.query.Category.findFirst({
-      where: and(eq(Category.id, input.id), eq(Category.tenant_id, ctx.tenantId!)),
+      where: and(eq(Category.id, input.id), eq(Category.tenant_id, ctx.tenantId)),
     })
 
     if (!category)
@@ -17,5 +25,13 @@ export const getByIdCategoryProcedure = authedProcedure
         message: "Category not found.",
       })
 
-    return category
+    const [productCount] = await ctx.db
+      .select({ count: count() })
+      .from(Product)
+      .where(and(eq(Product.category_id, input.id), eq(Product.tenant_id, ctx.tenantId)))
+
+    return {
+      ...category,
+      product_count: productCount?.count || 0,
+    }
   })

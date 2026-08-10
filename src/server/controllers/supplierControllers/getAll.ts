@@ -12,6 +12,7 @@ export const getAllSupplierProcedure = authedProcedure
       limit: z.number().optional().default(10),
       offset: z.number().optional().default(0),
       sortByType: z.enum(["asc", "desc"]).optional(),
+      supplier_type: z.enum(["PRIMARY", "SECONDARY"]).optional(),
       columns: z.array(z.enum(["id", "name"])).optional(),
     })
   )
@@ -56,7 +57,8 @@ export const getAllSupplierProcedure = authedProcedure
                 ilike(Supplier.email, `%${input.search}%`)
               )
             : sql`TRUE`,
-          input.includeDeleted ? sql`TRUE` : isNull(Supplier.deletedAt)
+          input.includeDeleted ? sql`TRUE` : isNull(Supplier.deletedAt),
+          input.supplier_type ? eq(Supplier.supplier_type, input.supplier_type) : sql`TRUE`
         )
       )
       .orderBy(...orderByClause)

@@ -1,5 +1,5 @@
 import { Supplier } from "../../../db/schema/supplier.ts"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { authedMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
@@ -23,22 +23,22 @@ export const updateSupplierProcedure = authedMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
     const [existingSupplier] = await ctx.db
       .select()
       .from(Supplier)
-      .where(eq(Supplier.id, input.supplierId))
+      .where(and(eq(Supplier.id, input.supplierId), eq(Supplier.tenant_id, ctx.tenantId)))
 
     if (!existingSupplier || existingSupplier.deletedAt) {
       throw new TRPCError({
         code: "NOT_FOUND",
         message: "Supplier not found.",
-      })
-    }
-
-    if ("name" in input) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Supplier name cannot be modified after creation.",
       })
     }
 
@@ -67,7 +67,7 @@ export const updateSupplierProcedure = authedMutation
     const [updatedSupplier] = await ctx.db
       .update(Supplier)
       .set(updatedData)
-      .where(eq(Supplier.id, input.supplierId))
+      .where(and(eq(Supplier.id, input.supplierId), eq(Supplier.tenant_id, ctx.tenantId)))
       .returning()
 
     return { message: "Supplier Updated", updatedSupplier }

@@ -11,9 +11,16 @@ export const getLocationById = authedProcedure
       id: z.string(),
     })
   )
-  .mutation(async ({ ctx, input }) => {
+  .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     const location = await ctx.db.query.Location.findFirst({
-      where: and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId!)),
+      where: and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId)),
     });
 
     if (!location) {
@@ -27,13 +34,13 @@ export const getLocationById = authedProcedure
     const [stockCount] = await ctx.db
       .select({ count: count() })
       .from(Stock)
-      .where(and(eq(Stock.location_id, input.id), eq(Stock.tenant_id, ctx.tenantId!)));
+      .where(and(eq(Stock.location_id, input.id), eq(Stock.tenant_id, ctx.tenantId)));
 
     // Get total quantity
     const [totalQty] = await ctx.db
       .select({ total: sum(Stock.qty) })
       .from(Stock)
-      .where(and(eq(Stock.location_id, input.id), eq(Stock.tenant_id, ctx.tenantId!)));
+      .where(and(eq(Stock.location_id, input.id), eq(Stock.tenant_id, ctx.tenantId)));
 
     return {
       ...location,

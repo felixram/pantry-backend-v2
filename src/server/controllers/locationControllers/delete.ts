@@ -1,7 +1,8 @@
 import z from "zod";
 import { adminMutation } from "../../trpc.ts";
 import { Location } from "../../../db/schema/location.ts";
-import { eq } from "drizzle-orm";
+import { Stock } from "../../../db/schema/stock.ts";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { ROLES } from "../../../types/user.ts";
 
@@ -16,6 +17,36 @@ export const deleteLocationProcedure = adminMutation
       })
     }
 
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
+    // Block deletion of a location that still holds stock, rather than
+    // silently orphaning it — Stock.location_id is onDelete: "cascade" on
+    // a real hard delete, but this is a soft delete, so unblocked deletion
+    // would just leave stock pointing at a location nobody can see anymore.
+    const stockWithQty = await ctx.db
+      .select({ id: Stock.id })
+      .from(Stock)
+      .where(
+        and(
+          eq(Stock.location_id, input.id),
+          eq(Stock.tenant_id, ctx.tenantId),
+          isNull(Stock.deletedAt),
+          gt(Stock.qty, 0)
+        )
+      )
+
+    if (stockWithQty.length > 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Cannot delete this location — it has stock on hand for ${stockWithQty.length} product${stockWithQty.length === 1 ? "" : "s"}. Clear stock first.`,
+      })
+    }
+
     const [deletedLocation] = await ctx.db
       .update(Location)
       .set({
@@ -23,7 +54,7 @@ export const deleteLocationProcedure = adminMutation
         deletedAt: new Date(Date.now()),
         deletedBy: ctx.user?.id,
       })
-      .where(eq(Location.id, input.id))
+      .where(and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId)))
       .returning()
 
     if (!deletedLocation) {

@@ -1,6 +1,6 @@
 import z from "zod"
 import { authedMutation } from "../../trpc.ts"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Location } from "../../../db/schema/location.ts"
 import { TRPCError } from "@trpc/server"
 import { ROLES } from "../../../types/user.ts"
@@ -24,6 +24,13 @@ export const updateLocationProcedure = authedMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
     // MANAGER can only update their own location
     if (ctx.user!.role === ROLES.manager && input.id !== ctx.userLocationId) {
       throw new TRPCError({
@@ -33,7 +40,7 @@ export const updateLocationProcedure = authedMutation
     }
 
     const location = await ctx.db.query.Location.findFirst({
-      where: eq(Location.id, input.id),
+      where: and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId)),
     })
 
     if (!location || location.deletedAt)
@@ -59,7 +66,7 @@ export const updateLocationProcedure = authedMutation
     await ctx.db
       .update(Location)
       .set(updatedData)
-      .where(eq(Location.id, input.id))
+      .where(and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId)))
 
     return { message: "Location updated!" }
   })

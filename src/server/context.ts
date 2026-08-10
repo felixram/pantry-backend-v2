@@ -17,39 +17,37 @@ export async function createContext({ req, res }: CreateExpressContextOptions) {
     try {
       const jwtPayload = verifyToken(token)
 
-      // Fetch user's location_id and tenant_id from database for access control
-      // Also verify user is not soft-deleted — if they are, treat as unauthenticated
-      const [dbUser] = await db
+      // Single joined query instead of a user lookup followed by a separate
+      // tenant lookup — this runs on every request, and each round trip to
+      // the DB costs real network latency, so two sequential ones doubled
+      // the cost for no reason. The join's ON clause already filters out a
+      // soft-deleted tenant (isNull(Tenant.deletedAt)), so `tenant_is_demo`
+      // coming back null unambiguously means "no active tenant" — is_demo
+      // is NOT NULL on real rows — whether because tenant_id is null,
+      // the tenant was soft-deleted, or (shouldn't happen) it's missing.
+      const [row] = await db
         .select({
-          id: User.id,
-          role: User.role,
           location_id: User.location_id,
           tenant_id: User.tenant_id,
+          tenant_is_demo: Tenant.is_demo,
         })
         .from(User)
+        .leftJoin(Tenant, and(eq(User.tenant_id, Tenant.id), isNull(Tenant.deletedAt)))
         .where(and(eq(User.id, jwtPayload.id), isNull(User.deletedAt)))
 
-      if (dbUser) {
-        user = jwtPayload
-        userLocationId = dbUser.location_id
-        tenantId = dbUser.tenant_id
-
-        // Fetch tenant's is_demo flag for demo account restrictions
-        // Also verify tenant is not soft-deleted — if it is, treat user as unauthenticated
-        if (tenantId) {
-          const [tenant] = await db
-            .select({ is_demo: Tenant.is_demo })
-            .from(Tenant)
-            .where(and(eq(Tenant.id, tenantId), isNull(Tenant.deletedAt)))
-
-          if (!tenant) {
-            user = null
-            userLocationId = null
-            tenantId = null
-            isDemoTenant = false
-          } else {
-            isDemoTenant = tenant.is_demo ?? false
-          }
+      if (row) {
+        if (row.tenant_id && row.tenant_is_demo === null) {
+          // User has a tenant_id, but no active tenant matched — soft-deleted
+          // or missing. Same as the old code's "if (!tenant)" branch.
+          user = null
+          userLocationId = null
+          tenantId = null
+          isDemoTenant = false
+        } else {
+          user = jwtPayload
+          userLocationId = row.location_id
+          tenantId = row.tenant_id
+          isDemoTenant = row.tenant_is_demo ?? false
         }
       }
     } catch (error) {

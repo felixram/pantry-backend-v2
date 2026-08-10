@@ -23,6 +23,7 @@ import { sendInventoryCountReminder } from "./services/email/emailService.ts"
 import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
 import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
 import { purgeExpiredDeletedProducts } from "./server/controllers/productControllers/helpers/purgeExpiredProducts.ts"
+import { purgeExpiredDeletedSuppliers } from "./server/controllers/supplierControllers/helpers/purgeExpiredSuppliers.ts"
 
 dotenv.config()
 
@@ -223,6 +224,28 @@ app.post("/api/cron/product-purge", async (req, res) => {
     return res.json({ success: true, checked, purged })
   } catch (error) {
     logger.error({ error }, "Cron product-purge failed")
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+// Cron endpoint: called by Railway cron every hour
+// Schedule: 0 * * * *
+// Command: curl -X POST https://your-api.railway.app/api/cron/supplier-purge -H "Authorization: Bearer $CRON_SECRET"
+// Hard-deletes suppliers soft-deleted more than 24h ago that have no
+// referencing purchase-order/invoice/alias/invoice-profile history;
+// suppliers with history stay soft-deleted permanently (see purgeExpiredSuppliers.ts).
+app.post("/api/cron/supplier-purge", async (req, res) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: "Unauthorized" })
+  }
+
+  try {
+    const { checked, purged } = await purgeExpiredDeletedSuppliers(db)
+    logger.info({ checked, purged }, "Supplier purge cron completed")
+    return res.json({ success: true, checked, purged })
+  } catch (error) {
+    logger.error({ error }, "Cron supplier-purge failed")
     return res.status(500).json({ error: "Internal server error" })
   }
 })

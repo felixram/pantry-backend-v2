@@ -1,5 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm"
 import { Supplier } from "../../../db/schema/supplier.ts"
+import { SupplierAudit } from "../../../db/schema/supplierAudit.ts"
 import { authedMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
@@ -23,7 +24,7 @@ export const deleteSupplierProcedure = authedMutation
     // instead of silently "succeeding" again.
     const existingSupplier = await ctx.db.query.Supplier.findFirst({
       where: and(eq(Supplier.id, input.id), eq(Supplier.tenant_id, ctx.tenantId), isNull(Supplier.deletedAt)),
-      columns: { id: true },
+      columns: { id: true, name: true },
     })
 
     if (!existingSupplier) {
@@ -33,10 +34,19 @@ export const deleteSupplierProcedure = authedMutation
       })
     }
 
-    await ctx.db
-      .update(Supplier)
-      .set({ deletedAt: new Date() })
-      .where(and(eq(Supplier.id, input.id), eq(Supplier.tenant_id, ctx.tenantId)))
+    await ctx.db.transaction(async (tx) => {
+      await tx
+        .update(Supplier)
+        .set({ deletedAt: new Date() })
+        .where(and(eq(Supplier.id, input.id), eq(Supplier.tenant_id, ctx.tenantId!)))
+      await tx.insert(SupplierAudit).values({
+        supplierId: input.id,
+        supplierName: existingSupplier.name,
+        tenant_id: ctx.tenantId!,
+        action: "deleted",
+        userId: ctx.user!.id,
+      })
+    })
 
     return { message: "Supplier successfully deleted" }
   })

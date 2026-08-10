@@ -13,8 +13,15 @@ export const getSupplierById = authedProcedure
     })
   )
   .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     const supplier = await ctx.db.query.Supplier.findFirst({
-      where: and(eq(Supplier.id, input.id), eq(Supplier.tenant_id, ctx.tenantId!)),
+      where: and(eq(Supplier.id, input.id), eq(Supplier.tenant_id, ctx.tenantId)),
     });
 
     if (!supplier) {
@@ -28,13 +35,13 @@ export const getSupplierById = authedProcedure
     const [productCount] = await ctx.db
       .select({ count: count() })
       .from(Product)
-      .where(and(eq(Product.supplier_id, input.id), eq(Product.tenant_id, ctx.tenantId!)));
+      .where(and(eq(Product.supplier_id, input.id), eq(Product.tenant_id, ctx.tenantId)));
 
     // Get purchase order count
     const [poCount] = await ctx.db
       .select({ count: count() })
       .from(PurchaseOrder)
-      .where(and(eq(PurchaseOrder.supplier_id, input.id), eq(PurchaseOrder.tenant_id, ctx.tenantId!)));
+      .where(and(eq(PurchaseOrder.supplier_id, input.id), eq(PurchaseOrder.tenant_id, ctx.tenantId)));
 
     return {
       ...supplier,

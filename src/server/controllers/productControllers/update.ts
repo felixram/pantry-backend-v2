@@ -13,6 +13,16 @@ export const updateProductProcedure = authedMutation
       productId: z.uuid(),
       name: z.string().optional(),
       unit: z.array(z.string()).optional(),
+      unitConversions: z
+        .array(
+          z.object({
+            unit_name: z.string(),
+            conversion_factor: z.number().positive(),
+            is_base_unit: z.boolean(),
+            is_purchasable: z.boolean().optional(),
+          })
+        )
+        .optional(),
       costPrice: z.number().optional(),
       costPriceUnit: z.string().nullable().optional(),
       sellingPrice: z.number().optional(),
@@ -163,31 +173,50 @@ export const updateProductProcedure = authedMutation
       }
 
       // Sync unit conversion entries (+ Product.unit) when the unit array is
-      // updated. Surviving units keep their existing factor/base/purchasable;
-      // brand-new units get defaults. syncProductUnits is the only place
-      // that actually writes ProductUnitConversion or Product.unit, and it
-      // also guards against orphaning the (now-current) version's price
-      // units and clears any stale Stock.display_unit values.
+      // updated. syncProductUnits is the only place that actually writes
+      // ProductUnitConversion or Product.unit, and it also guards against
+      // orphaning the (now-current) version's price units and clears any
+      // stale Stock.display_unit values.
       if (input.unit) {
-        const existingConversions = await tx.query.ProductUnitConversion.findMany({
-          where: and(
-            eq(ProductUnitConversion.product_id, input.productId),
-            eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
-          ),
-        });
-        const existingByName = new Map(existingConversions.map((c) => [c.unit_name, c]));
+        let targetConversions;
 
-        const targetConversions = input.unit.map((unitName) => {
-          const existing = existingByName.get(unitName);
-          return existing
-            ? {
-                unit_name: unitName,
-                conversion_factor: existing.conversion_factor,
-                is_base_unit: existing.is_base_unit,
-                is_purchasable: existing.is_purchasable,
-              }
-            : { unit_name: unitName, conversion_factor: 1, is_base_unit: false, is_purchasable: true };
-        });
+        if (input.unitConversions) {
+          // Caller sent the full desired conversions (factor/base/purchasable
+          // included) — e.g. the edit UI, which always has complete state
+          // since it's a controlled form, not a diff. Use it as-is (defaulting
+          // an omitted is_purchasable to true, same as syncProductUnits does
+          // at insert time, so exactOptionalPropertyTypes doesn't see an
+          // explicit `undefined` where the target type wants boolean|absent).
+          targetConversions = input.unitConversions.map((c) => ({
+            unit_name: c.unit_name,
+            conversion_factor: c.conversion_factor,
+            is_base_unit: c.is_base_unit,
+            is_purchasable: c.is_purchasable ?? true,
+          }));
+        } else {
+          // Caller sent only unit names — reconstruct conversions by merging
+          // with whatever's already in the DB: surviving units keep their
+          // existing factor/base/purchasable, brand-new units get defaults.
+          const existingConversions = await tx.query.ProductUnitConversion.findMany({
+            where: and(
+              eq(ProductUnitConversion.product_id, input.productId),
+              eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
+            ),
+          });
+          const existingByName = new Map(existingConversions.map((c) => [c.unit_name, c]));
+
+          targetConversions = input.unit.map((unitName) => {
+            const existing = existingByName.get(unitName);
+            return existing
+              ? {
+                  unit_name: unitName,
+                  conversion_factor: existing.conversion_factor,
+                  is_base_unit: existing.is_base_unit,
+                  is_purchasable: existing.is_purchasable,
+                }
+              : { unit_name: unitName, conversion_factor: 1, is_base_unit: false, is_purchasable: true };
+          });
+        }
 
         await syncProductUnits(tx, {
           productId: input.productId,

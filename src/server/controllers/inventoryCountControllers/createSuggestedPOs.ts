@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { authedMutation } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Product } from "../../../db/schema/product.ts";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
@@ -113,11 +113,13 @@ export const createSuggestedPOs = authedMutation
         });
       }
 
-      // Mark session so suggested POs can't be created again
+      // Mark session so suggested POs can't be created again — tenant-scoped,
+      // matching the check getSuggestedPOs.ts already does before reading
+      // this same session (this write path was missing it).
       await tx
         .update(InventoryCountSession)
         .set({ suggested_pos_created_at: new Date() })
-        .where(eq(InventoryCountSession.id, input.session_id));
+        .where(and(eq(InventoryCountSession.id, input.session_id), eq(InventoryCountSession.tenant_id, ctx.tenantId!)));
 
       return results;
     });

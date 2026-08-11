@@ -4,7 +4,8 @@ import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts";
 import { TaxRate } from "../../../db/schema/taxRate.ts";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
+import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { resolveApplicableTaxRate } from "../../../utils/taxResolution.ts";
 import {
@@ -15,6 +16,8 @@ import {
   calculateGrandTotal,
 } from "../../../utils/poTotals.ts";
 import { roundToCent } from "../../../utils/money.ts";
+import { computeAllowedActions } from "./helpers/permissionMatrix.ts";
+import type { userRoles } from "../../../types/user.ts";
 
 export const getPurchaseOrderById = authedProcedure
   .input(
@@ -29,6 +32,7 @@ export const getPurchaseOrderById = authedProcedure
         supplier: true,
         destinationLocation: true,
         purchaseOrderItems: {
+          where: isNull(PurchaseOrderItem.deletedAt),
           with: {
             product: {
               with: {
@@ -153,6 +157,11 @@ export const getPurchaseOrderById = authedProcedure
       ? roundToCent(purchaseOrder.total)
       : calculateGrandTotal({ subtotal: computedSubtotal, tax: computedTax, shipping: 0 })
 
+    const allowedActions = computeAllowedActions(
+      { status: purchaseOrder.status, is_unlocked: purchaseOrder.is_unlocked ?? false },
+      ctx.user!.role as userRoles
+    );
+
     return {
       ...purchaseOrder,
       purchaseOrderItems: itemsWithTax,
@@ -161,6 +170,7 @@ export const getPurchaseOrderById = authedProcedure
       total: finalTotal,
       taxableCount,
       items_count: purchaseOrder.purchaseOrderItems.length,
+      allowedActions,
       auditLogs: auditLogs.map((log) => ({
         id: log.id,
         purchaseOrderId: log.purchaseOrderId,

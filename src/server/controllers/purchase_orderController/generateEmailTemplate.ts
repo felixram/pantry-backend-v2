@@ -2,11 +2,25 @@ import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import {
   calculateLineTotal,
   calculateSubtotal,
 } from "../../../utils/poTotals.ts";
+
+// Minimal HTML-entity escaping for interpolated user-editable fields
+// (product/supplier/location names, addresses) — these are user-editable
+// elsewhere in the app, so unescaped interpolation into an HTML email body
+// is a stored-XSS-in-email vector.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 export const generateEmailTemplate = authedProcedure
   .input(
@@ -14,9 +28,16 @@ export const generateEmailTemplate = authedProcedure
       purchase_order_id: z.string(),
     })
   )
-  .mutation(async ({ ctx, input }) => {
+  .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     const purchaseOrder = await ctx.db.query.PurchaseOrder.findFirst({
-      where: eq(PurchaseOrder.id, input.purchase_order_id),
+      where: and(eq(PurchaseOrder.id, input.purchase_order_id), eq(PurchaseOrder.tenant_id, ctx.tenantId)),
       with: {
         supplier: true,
         destinationLocation: true,
@@ -40,6 +61,10 @@ export const generateEmailTemplate = authedProcedure
         code: "BAD_REQUEST",
         message: "Purchase order has no supplier",
       });
+    }
+
+    if (purchaseOrder.destination_location_id) {
+      validateLocationAccess(ctx.user!, ctx.userLocationId, purchaseOrder.destination_location_id);
     }
 
     // Calculate total
@@ -76,26 +101,26 @@ export const generateEmailTemplate = authedProcedure
 </head>
 <body>
   <div class="header">
-    <h2>Purchase Order #${purchaseOrder.po_number}</h2>
+    <h2>Purchase Order #${escapeHtml(purchaseOrder.po_number)}</h2>
     <p>Date: ${new Date(purchaseOrder.createdAt).toLocaleDateString()}</p>
-    <p>Status: ${purchaseOrder.status}</p>
+    <p>Status: ${escapeHtml(purchaseOrder.status)}</p>
   </div>
 
   <div class="info">
     <h3>Supplier Information:</h3>
-    <p><strong>${purchaseOrder.supplier.name}</strong></p>
-    <p>Contact: ${purchaseOrder.supplier.contact_name}</p>
-    <p>Phone: ${purchaseOrder.supplier.phone}</p>
-    ${purchaseOrder.supplier.email ? `<p>Email: ${purchaseOrder.supplier.email}</p>` : ''}
-    ${purchaseOrder.supplier.address ? `<p>Address: ${purchaseOrder.supplier.address}</p>` : ''}
+    <p><strong>${escapeHtml(purchaseOrder.supplier.name)}</strong></p>
+    <p>Contact: ${escapeHtml(purchaseOrder.supplier.contact_name)}</p>
+    <p>Phone: ${escapeHtml(purchaseOrder.supplier.phone || '')}</p>
+    ${purchaseOrder.supplier.email ? `<p>Email: ${escapeHtml(purchaseOrder.supplier.email)}</p>` : ''}
+    ${purchaseOrder.supplier.address ? `<p>Address: ${escapeHtml(purchaseOrder.supplier.address)}</p>` : ''}
   </div>
 
   ${purchaseOrder.destinationLocation ? `
   <div class="info">
     <h3>Delivery Location:</h3>
-    <p><strong>${purchaseOrder.destinationLocation.name}</strong></p>
-    <p>${purchaseOrder.destinationLocation.address}</p>
-    ${purchaseOrder.destinationLocation.city ? `<p>${purchaseOrder.destinationLocation.city}, ${purchaseOrder.destinationLocation.state || ''} ${purchaseOrder.destinationLocation.postalCode || ''}</p>` : ''}
+    <p><strong>${escapeHtml(purchaseOrder.destinationLocation.name)}</strong></p>
+    <p>${escapeHtml(purchaseOrder.destinationLocation.address)}</p>
+    ${purchaseOrder.destinationLocation.city ? `<p>${escapeHtml(purchaseOrder.destinationLocation.city)}, ${escapeHtml(purchaseOrder.destinationLocation.state || '')} ${escapeHtml(purchaseOrder.destinationLocation.postalCode || '')}</p>` : ''}
   </div>
   ` : ''}
 
@@ -117,8 +142,8 @@ export const generateEmailTemplate = authedProcedure
           const itemTotal = calculateLineTotal(item);
           return `
         <tr>
-          <td>${product?.name || 'Unknown Product'}</td>
-          <td>${product?.sku || 'N/A'}</td>
+          <td>${escapeHtml(product?.name || 'Unknown Product')}</td>
+          <td>${escapeHtml(product?.sku || 'N/A')}</td>
           <td>${item.qty}</td>
           <td>$${(item.unit_price || 0).toFixed(2)}</td>
           <td>$${itemTotal.toFixed(2)}</td>
@@ -144,7 +169,7 @@ export const generateEmailTemplate = authedProcedure
   ` : ''}
 
   ${purchaseOrder.supplier.delivery_days ? `
-  <p><strong>Delivery Days:</strong> ${purchaseOrder.supplier.delivery_days}</p>
+  <p><strong>Delivery Days:</strong> ${escapeHtml(purchaseOrder.supplier.delivery_days)}</p>
   ` : ''}
 
   <div class="footer">

@@ -3,7 +3,7 @@ import { authedMutation } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import type { userRoles } from "../../../types/user.ts";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import {
   validatePermission,
@@ -17,9 +17,16 @@ export const deletePurchaseOrder = authedMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     // Fetch the order to check its current status
     const order = await ctx.db.query.PurchaseOrder.findFirst({
-      where: eq(PurchaseOrder.id, input.purchaseOrderId),
+      where: and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId)),
     });
 
     if (!order) {
@@ -54,7 +61,7 @@ export const deletePurchaseOrder = authedMutation
     await ctx.db
       .update(PurchaseOrder)
       .set({ deletedAt: new Date(Date.now()) })
-      .where(eq(PurchaseOrder.id, input.purchaseOrderId));
+      .where(and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId)));
 
     return { message: "Order deleted successfully" };
   });

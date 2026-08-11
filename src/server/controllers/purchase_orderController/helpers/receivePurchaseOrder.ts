@@ -1,7 +1,7 @@
 import type { ExtractTablesWithRelations } from "drizzle-orm";
 import type { PgTransaction } from "drizzle-orm/pg-core";
 import type { PostgresJsQueryResultHKT } from "drizzle-orm/postgres-js";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { PurchaseOrderItem } from "../../../../db/schema/purchaseOrderItem.ts";
 import { PurchaseOrderAudit } from "../../../../db/schema/purchaseOrder_audit_log.ts";
 import { Stock } from "../../../../db/schema/stock.ts";
@@ -54,7 +54,7 @@ export async function receivePurchaseOrder(
 ): Promise<string> {
   // 1. Get all items in the purchase order
   const orderItems = await tx.query.PurchaseOrderItem.findMany({
-    where: eq(PurchaseOrderItem.purchase_order_id, purchaseOrderId),
+    where: and(eq(PurchaseOrderItem.purchase_order_id, purchaseOrderId), isNull(PurchaseOrderItem.deletedAt)),
     with: {
       product: true,
     },

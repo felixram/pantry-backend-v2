@@ -279,3 +279,28 @@ export function canEditUnlockedPO(
     hasElevatedRole(role)
   );
 }
+
+/**
+ * Computes the full set of actions a role can perform on a PO right now,
+ * for the frontend to render available buttons from — so the client never
+ * needs its own copy of the state machine/permission rules (the v1
+ * frontend hand-maintained a parallel copy of this exact logic, a standing
+ * drift risk between frontend and backend).
+ *
+ * PERMISSION_MATRIX already covers approve/reject/mark_ordered/mark_received/
+ * cancel/unlock consistently with statusValidation.ts's roleTransitions map
+ * (verified entry-by-entry), so getAllowedActions() is a reliable base.
+ * "lock" is the one action PERMISSION_MATRIX never grants (its eligibility
+ * depends on runtime state — is_unlocked — not just status+role), so it's
+ * computed separately here via canLockPO().
+ */
+export function computeAllowedActions(
+  po: { status: string; is_unlocked: boolean },
+  role: userRoles
+): POPermissionAction[] {
+  const actions = new Set(getAllowedActions(role, po.status));
+  if (canLockPO(po, role)) {
+    actions.add("lock");
+  }
+  return Array.from(actions);
+}

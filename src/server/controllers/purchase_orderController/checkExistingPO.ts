@@ -1,6 +1,8 @@
 import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
+import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
+import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { and, eq, ne, isNull } from "drizzle-orm";
 import { ORDER_STATUS } from "../../../types/orders.ts";
 
@@ -12,11 +14,19 @@ export const checkExistingPO = authedProcedure
     })
   )
   .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     // Check for existing PO with same supplier + location
     // Only consider non-terminal states (DRAFT, PENDING_APPROVAL, APPROVED)
     // Exclude soft-deleted POs
     const existingPO = await ctx.db.query.PurchaseOrder.findFirst({
       where: and(
+        eq(PurchaseOrder.tenant_id, ctx.tenantId),
         eq(PurchaseOrder.supplier_id, input.supplier_id),
         eq(PurchaseOrder.destination_location_id, input.destination_location_id),
         ne(PurchaseOrder.status, ORDER_STATUS.cancelled),
@@ -26,7 +36,9 @@ export const checkExistingPO = authedProcedure
         isNull(PurchaseOrder.deletedAt),
       ),
       with: {
-        purchaseOrderItems: true,
+        purchaseOrderItems: {
+          where: isNull(PurchaseOrderItem.deletedAt),
+        },
       },
     });
 

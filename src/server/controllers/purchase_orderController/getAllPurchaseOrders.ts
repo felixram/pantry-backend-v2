@@ -10,6 +10,8 @@ import { calculateSubtotal } from "../../../utils/poTotals.ts";
 import { roundToCent } from "../../../utils/money.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
 import { TRPCError } from "@trpc/server";
+import { computeAllowedActions } from "./helpers/permissionMatrix.ts";
+import type { userRoles } from "../../../types/user.ts";
 
 export const getAllPuchaseOrders = authedProcedure
   .input(
@@ -84,6 +86,7 @@ export const getAllPuchaseOrders = authedProcedure
           id: PurchaseOrder.id,
           po_number: PurchaseOrder.po_number,
           status: PurchaseOrder.status,
+          is_unlocked: PurchaseOrder.is_unlocked,
           createdAt: PurchaseOrder.createdAt,
           supplierName: Supplier.name,
           locationName: Location.name,
@@ -109,6 +112,7 @@ export const getAllPuchaseOrders = authedProcedure
         .offset(input.offset);
 
       const total = results[0]?.totalCount ?? 0;
+      const userRole = ctx.user!.role as userRoles;
 
       return {
         results: results.map(({ totalCount, supplierName, locationName, total: rowTotal, ...rest }) => ({
@@ -118,6 +122,10 @@ export const getAllPuchaseOrders = authedProcedure
           total: roundToCent(rowTotal),
           supplier: supplierName ? { name: supplierName } : null,
           destinationLocation: locationName ? { name: locationName } : null,
+          allowedActions: computeAllowedActions(
+            { status: rest.status, is_unlocked: rest.is_unlocked ?? false },
+            userRole
+          ),
         })),
         pagination: {
           total,
@@ -134,6 +142,7 @@ export const getAllPuchaseOrders = authedProcedure
       where: and(...conditions),
       with: {
         purchaseOrderItems: {
+          where: isNull(PurchaseOrderItem.deletedAt),
           with: { product: true }
         },
         supplier: true,
@@ -164,11 +173,16 @@ export const getAllPuchaseOrders = authedProcedure
       input.offset + input.limit
     );
 
-    // Add computed fields: itemsCount and total
+    // Add computed fields: itemsCount, total, allowedActions
+    const userRole = ctx.user!.role as userRoles;
     const results = paginatedOrders.map((order) => ({
       ...order,
       itemsCount: order.purchaseOrderItems?.length || 0,
       total: calculateSubtotal(order.purchaseOrderItems || []),
+      allowedActions: computeAllowedActions(
+        { status: order.status, is_unlocked: order.is_unlocked ?? false },
+        userRole
+      ),
     }));
 
     return {

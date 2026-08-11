@@ -1,7 +1,7 @@
 import z from "zod";
 import { authedMutation } from "../../trpc.ts";
 import { Product } from "../../../db/schema/product.ts";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
@@ -9,6 +9,7 @@ import { ORDER_STATUS } from "../../../types/orders.ts";
 import { isLocationScoped, type userRoles } from "../../../types/user.ts";
 import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts";
 import { canEditUnlockedPO } from "./helpers/permissionMatrix.ts";
+import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 
 export const addItemsToPurchaseOrder = authedMutation
   .input(
@@ -28,10 +29,17 @@ export const addItemsToPurchaseOrder = authedMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     await ctx.db.transaction(async (tx) => {
       // Get the purchase order
       const purchaseOrder = await tx.query.PurchaseOrder.findFirst({
-        where: eq(PurchaseOrder.id, input.purchaseOrderId),
+        where: and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId!)),
       });
 
       if (!purchaseOrder) {
@@ -39,6 +47,12 @@ export const addItemsToPurchaseOrder = authedMutation
           code: "NOT_FOUND",
           message: "Purchase order not found.",
         });
+      }
+
+      // Validate location access for location-scoped users (was previously
+      // missing here, unlike the singular addPurchaseOrderItem endpoint)
+      if (purchaseOrder.destination_location_id) {
+        validateLocationAccess(ctx.user!, ctx.userLocationId, purchaseOrder.destination_location_id);
       }
 
       // Check if ADMIN is editing an unlocked APPROVED PO
@@ -95,7 +109,8 @@ export const addItemsToPurchaseOrder = authedMutation
         const existingItem = await tx.query.PurchaseOrderItem.findFirst({
           where: and(
             eq(PurchaseOrderItem.purchase_order_id, input.purchaseOrderId),
-            eq(PurchaseOrderItem.product_id, item.product_id)
+            eq(PurchaseOrderItem.product_id, item.product_id),
+            isNull(PurchaseOrderItem.deletedAt)
           ),
         });
 

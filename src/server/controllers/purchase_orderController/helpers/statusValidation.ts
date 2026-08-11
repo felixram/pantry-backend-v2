@@ -8,7 +8,18 @@ import { ROLES, hasElevatedRole, type userRoles } from "../../../../types/user.t
  * This is the base transition map (no role restrictions)
  */
 const validTransitions: Record<string, string[]> = {
-  [ORDER_STATUS.draft]: [ORDER_STATUS.pendingApproval, ORDER_STATUS.cancelled],
+  // Includes approved/rejected (not just pendingApproval/cancelled) because
+  // MANAGER can fast-track approve/reject a DRAFT directly — see
+  // roleTransitions[draft][manager] below. Previously this base map was
+  // missing those two, so the role-aware check never even ran: the base
+  // check threw first, making the documented MANAGER fast-track capability
+  // completely unreachable in practice.
+  [ORDER_STATUS.draft]: [
+    ORDER_STATUS.pendingApproval,
+    ORDER_STATUS.cancelled,
+    ORDER_STATUS.approved,
+    ORDER_STATUS.rejected,
+  ],
   [ORDER_STATUS.pendingApproval]: [
     ORDER_STATUS.approved,
     ORDER_STATUS.rejected,

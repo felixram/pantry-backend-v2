@@ -6,7 +6,7 @@ import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
 import { isLocationScoped, type userRoles } from "../../../types/user.ts";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import {
   validatePermission,
@@ -23,12 +23,21 @@ export const removePurchaseOrderItem = authedMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     return await ctx.db.transaction(async (tx) => {
       // 1. Get the purchase order with its items
       const purchaseOrder = await tx.query.PurchaseOrder.findFirst({
-        where: eq(PurchaseOrder.id, input.purchaseOrderId),
+        where: and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId!)),
         with: {
-          purchaseOrderItems: true,
+          purchaseOrderItems: {
+            where: isNull(PurchaseOrderItem.deletedAt),
+          },
         },
       });
 
@@ -89,24 +98,16 @@ export const removePurchaseOrderItem = authedMutation
         unit_price: item.unit_price,
       };
 
-      // 5. Check if this is the last item
-      const isLastItem = purchaseOrder.purchaseOrderItems.length === 1;
-      let poDeleted = false;
-
-      // 6. Delete the item
+      // 5. Soft-delete the item. Unlike v1, removing the last item does NOT
+      // implicitly delete/cancel the parent PO — a PO with zero items is a
+      // valid state (e.g. mid-edit in DRAFT); use the explicit Cancel/Delete
+      // actions to end a PO's lifecycle instead of inferring it from item count.
       await tx
-        .delete(PurchaseOrderItem)
+        .update(PurchaseOrderItem)
+        .set({ deletedAt: new Date() })
         .where(eq(PurchaseOrderItem.id, input.itemId));
 
-      // 7. If this was the last item, hard delete the PO
-      if (isLastItem) {
-        await tx
-          .delete(PurchaseOrder)
-          .where(eq(PurchaseOrder.id, input.purchaseOrderId));
-        poDeleted = true;
-      }
-
-      // 8. Log change to audit table
+      // 6. Log change to audit table
       // - Skip for DRAFT orders
       // - Log for USER changes (non-draft)
       // - Log for ADMIN changes on unlocked POs
@@ -118,7 +119,7 @@ export const removePurchaseOrderItem = authedMutation
         await tx.insert(PurchaseOrderAudit).values({
           purchaseOrderId: input.purchaseOrderId,
           userId: ctx.user!.id,
-          fieldChanged: isLastItem ? "last_item_removed_po_deleted" : "item_removed",
+          fieldChanged: "item_removed",
           oldValue: JSON.stringify(oldValue),
           newValue: "removed",
           reason: input.reason,
@@ -126,11 +127,8 @@ export const removePurchaseOrderItem = authedMutation
       }
 
       return {
-        message: poDeleted
-          ? "Last item removed. Purchase order has been deleted."
-          : "Item removed successfully",
-        remainingItems: poDeleted ? 0 : purchaseOrder.purchaseOrderItems.length - 1,
-        poDeleted,
+        message: "Item removed successfully",
+        remainingItems: purchaseOrder.purchaseOrderItems.length - 1,
       };
     });
   });

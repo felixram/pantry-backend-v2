@@ -7,7 +7,7 @@ import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.t
 import { Product } from "../../../db/schema/product.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
 import { isLocationScoped, type userRoles } from "../../../types/user.ts";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { receivePurchaseOrder } from "./helpers/receivePurchaseOrder.ts";
 import {
   validateRoleStatusTransition,
@@ -69,9 +69,11 @@ export const updatePurchaseOrder = authedMutation
     return await ctx.db.transaction(async (tx) => {
       // 1. Get the current purchase order
       const existingOrder = await tx.query.PurchaseOrder.findFirst({
-        where: eq(PurchaseOrder.id, input.purchaseOrderId),
+        where: and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId!)),
         with: {
-          purchaseOrderItems: true,
+          purchaseOrderItems: {
+            where: isNull(PurchaseOrderItem.deletedAt),
+          },
         },
       });
 
@@ -119,7 +121,7 @@ export const updatePurchaseOrder = authedMutation
         }
 
         // 2.1. Validate header changes using permission matrix
-        if (input.supplier_id || input.destination_location_id) {
+        if (input.supplier_id !== undefined || input.destination_location_id !== undefined) {
           validatePermission(
             userRole,
             existingOrder.status,
@@ -176,7 +178,7 @@ export const updatePurchaseOrder = authedMutation
 
       // 4. Handle supplier_id update
       if (
-        input.supplier_id &&
+        input.supplier_id !== undefined &&
         input.supplier_id !== existingOrder.supplier_id
       ) {
         changes.push({
@@ -188,7 +190,7 @@ export const updatePurchaseOrder = authedMutation
 
       // 4.5. Handle destination_location_id update
       if (
-        input.destination_location_id &&
+        input.destination_location_id !== undefined &&
         input.destination_location_id !== existingOrder.destination_location_id
       ) {
         changes.push({
@@ -200,6 +202,16 @@ export const updatePurchaseOrder = authedMutation
 
       // 5. Handle items update
       if (input.items && input.items.length > 0) {
+        // Reject duplicate product_ids within the input, matching
+        // createPurchaseOrderWithItems/addItemsToPurchaseOrder.
+        const productIds = input.items.map((item) => item.product_id);
+        if (new Set(productIds).size !== productIds.length) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Duplicate products in the item list. Each product can only appear once.",
+          });
+        }
+
         // Validate all products exist
         for (const item of input.items) {
           const product = await tx.query.Product.findFirst({
@@ -214,11 +226,17 @@ export const updatePurchaseOrder = authedMutation
           }
         }
 
-        // Delete existing items
+        // Soft-delete existing items (preserves received_qty/audit-referenceable
+        // history instead of destroying it, and respects the deletedAt column
+        // that every other soft-deletable table in this app uses).
         await tx
-          .delete(PurchaseOrderItem)
+          .update(PurchaseOrderItem)
+          .set({ deletedAt: new Date() })
           .where(
-            eq(PurchaseOrderItem.purchase_order_id, input.purchaseOrderId),
+            and(
+              eq(PurchaseOrderItem.purchase_order_id, input.purchaseOrderId),
+              isNull(PurchaseOrderItem.deletedAt),
+            ),
           );
 
         // Insert new items
@@ -239,11 +257,13 @@ export const updatePurchaseOrder = authedMutation
       }
 
       // 6. Update the purchase order
-      const finalStatus = input.status || existingOrder.status;
+      const finalStatus = input.status !== undefined ? input.status : existingOrder.status;
       const finalDestinationLocationId =
-        input.destination_location_id || existingOrder.destination_location_id;
+        input.destination_location_id !== undefined
+          ? input.destination_location_id
+          : existingOrder.destination_location_id;
       const finalSupplierId =
-        input.supplier_id || existingOrder.supplier_id;
+        input.supplier_id !== undefined ? input.supplier_id : existingOrder.supplier_id;
 
       await tx
         .update(PurchaseOrder)
@@ -252,7 +272,7 @@ export const updatePurchaseOrder = authedMutation
           destination_location_id: finalDestinationLocationId,
           supplier_id: finalSupplierId,
         })
-        .where(eq(PurchaseOrder.id, input.purchaseOrderId));
+        .where(and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId!)));
 
       // 7. Log all changes to audit table
       // Always log status changes for audit trail

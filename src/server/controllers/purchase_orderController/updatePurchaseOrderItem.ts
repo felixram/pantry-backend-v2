@@ -7,7 +7,7 @@ import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.t
 import { Product } from "../../../db/schema/product.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
 import { isLocationScoped, type userRoles } from "../../../types/user.ts";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import {
   validatePermission,
@@ -27,12 +27,20 @@ export const updatePurchaseOrderItem = authedMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     return await ctx.db.transaction(async (tx) => {
       // 1. Get the purchase order with its items
       const purchaseOrder = await tx.query.PurchaseOrder.findFirst({
-        where: eq(PurchaseOrder.id, input.purchaseOrderId),
+        where: and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId!)),
         with: {
           purchaseOrderItems: {
+            where: isNull(PurchaseOrderItem.deletedAt),
             with: {
               product: true,
             },

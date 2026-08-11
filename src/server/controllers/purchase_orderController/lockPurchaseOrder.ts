@@ -3,7 +3,7 @@ import { adminMutation } from "../../trpc.ts"
 import { TRPCError } from "@trpc/server"
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts"
 import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 
 /**
  * Lock an unlocked Purchase Order after ADMIN editing
@@ -19,10 +19,17 @@ export const lockPurchaseOrder = adminMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
     return await ctx.db.transaction(async (tx) => {
       // 1. Get the current purchase order
       const purchaseOrder = await tx.query.PurchaseOrder.findFirst({
-        where: eq(PurchaseOrder.id, input.id),
+        where: and(eq(PurchaseOrder.id, input.id), eq(PurchaseOrder.tenant_id, ctx.tenantId!)),
       })
 
       if (!purchaseOrder) {
@@ -49,7 +56,7 @@ export const lockPurchaseOrder = adminMutation
           unlocked_at: null,
           updatedAt: new Date(),
         })
-        .where(eq(PurchaseOrder.id, input.id))
+        .where(and(eq(PurchaseOrder.id, input.id), eq(PurchaseOrder.tenant_id, ctx.tenantId!)))
 
       // 4. Create audit log entry
       await tx.insert(PurchaseOrderAudit).values({

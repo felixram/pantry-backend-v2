@@ -7,7 +7,7 @@ import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.t
 import { Product } from "../../../db/schema/product.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
 import { isLocationScoped, type userRoles } from "../../../types/user.ts";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import {
   validatePermission,
@@ -27,12 +27,21 @@ export const addPurchaseOrderItem = authedMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     return await ctx.db.transaction(async (tx) => {
       // 1. Get the purchase order
       const purchaseOrder = await tx.query.PurchaseOrder.findFirst({
-        where: eq(PurchaseOrder.id, input.purchaseOrderId),
+        where: and(eq(PurchaseOrder.id, input.purchaseOrderId), eq(PurchaseOrder.tenant_id, ctx.tenantId!)),
         with: {
-          purchaseOrderItems: true,
+          purchaseOrderItems: {
+            where: isNull(PurchaseOrderItem.deletedAt),
+          },
         },
       });
 
@@ -118,11 +127,15 @@ export const addPurchaseOrderItem = authedMutation
           .where(eq(Product.id, input.product_id));
       }
 
-      // 6. Log change to audit table (skip for DRAFT orders or if user is ADMIN)
-      if (
+      // 6. Log change to audit table
+      // - Skip for DRAFT orders
+      // - Log for USER changes (non-draft)
+      // - Log for ADMIN changes on unlocked POs
+      const shouldAudit =
         purchaseOrder.status !== ORDER_STATUS.draft &&
-        isLocationScoped(ctx.user!.role)
-      ) {
+        (isLocationScoped(ctx.user!.role) || isUnlockedEdit);
+
+      if (shouldAudit) {
         await tx.insert(PurchaseOrderAudit).values({
           purchaseOrderId: input.purchaseOrderId,
           userId: ctx.user!.id,

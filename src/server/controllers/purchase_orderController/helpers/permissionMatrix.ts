@@ -290,9 +290,9 @@ export function canEditUnlockedPO(
  * PERMISSION_MATRIX already covers approve/reject/mark_ordered/mark_received/
  * cancel/unlock consistently with statusValidation.ts's roleTransitions map
  * (verified entry-by-entry), so getAllowedActions() is a reliable base.
- * "lock" is the one action PERMISSION_MATRIX never grants (its eligibility
- * depends on runtime state — is_unlocked — not just status+role), so it's
- * computed separately here via canLockPO().
+ * "lock" and the unlocked-edit permissions are the actions PERMISSION_MATRIX
+ * never grants directly (their eligibility depends on runtime state —
+ * is_unlocked — not just status+role), so they're computed separately here.
  */
 export function computeAllowedActions(
   po: { status: string; is_unlocked: boolean },
@@ -301,6 +301,10 @@ export function computeAllowedActions(
   const actions = new Set(getAllowedActions(role, po.status));
   if (canLockPO(po, role)) {
     actions.add("lock");
+  }
+  if (canEditUnlockedPO(po, role)) {
+    actions.add("edit_header");
+    actions.add("edit_items");
   }
   return Array.from(actions);
 }

@@ -59,7 +59,7 @@ export const generateMagicLink = authedMutation
     });
 
     const clientUrl = process.env.CLIENT_URL ?? "http://localhost:5173";
-    const magicLink = `${clientUrl}/inventory/count?token=${token}`;
+    const magicLink = `${clientUrl}/count-entry?token=${token}`;
 
     const [tenant] = await ctx.db
       .select({ name: Tenant.name })

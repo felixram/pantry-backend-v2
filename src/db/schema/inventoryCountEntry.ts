@@ -25,6 +25,11 @@ export const InventoryCountEntry = pgTable(
     counted_qty: real("counted_qty"),
     // Which unit the counted_qty is expressed in (nullable for legacy rows)
     unit: text("unit"),
+    // Conversion factor ("1 <unit> = N base units") in effect when counted_qty
+    // was last recorded — frozen so approval uses count-time intent, not
+    // whatever the product's conversion factor happens to be by then. Same
+    // pattern as PurchaseOrderItem.unit_conversion_factor.
+    unit_conversion_factor: real("unit_conversion_factor"),
     // Manager's adjusted quantity (same unit as counted_qty). Null = accepted as-is.
     reviewed_qty: real("reviewed_qty"),
     // Timestamp of last successful sync from client

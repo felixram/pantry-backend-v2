@@ -56,7 +56,7 @@ export const createSuggestedPOs = authedMutation
         // Validate all products exist
         for (const item of order.items) {
           const product = await tx.query.Product.findFirst({
-            where: eq(Product.id, item.product_id),
+            where: and(eq(Product.id, item.product_id), eq(Product.tenant_id, ctx.tenantId!)),
           });
           if (!product) {
             throw new TRPCError({

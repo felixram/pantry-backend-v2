@@ -14,6 +14,7 @@ import {
   getCountReviewDetail,
   adjustCountEntry,
   approveCount,
+  rejectCount,
 } from "../../controllers/inventoryCountControllers/index.ts";
 
 export const inventoryCountRouter = t.router({
@@ -31,4 +32,5 @@ export const inventoryCountRouter = t.router({
   getCountReviewDetail,
   adjustCountEntry,
   approveCount,
+  rejectCount,
 });

@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, inArray } from "drizzle-orm";
 import { InventoryCountSession, INVENTORY_COUNT_STATUS } from "../../../db/schema/inventoryCountSession.ts";
 import { InventoryCountEntry } from "../../../db/schema/inventoryCountEntry.ts";
+import { resolveUnitFactor } from "../../../utils/loadUnitConversions.ts";
 
 export const bulkUpdateEntries = authedMutation
   .input(
@@ -57,7 +58,7 @@ export const bulkUpdateEntries = authedMutation
 
       // Verify all entry IDs belong to this session (prevents cross-session tampering)
       const existingEntries = await tx
-        .select({ id: InventoryCountEntry.id })
+        .select({ id: InventoryCountEntry.id, product_id: InventoryCountEntry.product_id })
         .from(InventoryCountEntry)
         .where(
           and(
@@ -73,15 +74,22 @@ export const bulkUpdateEntries = authedMutation
         });
       }
 
+      const productIdByEntryId = new Map(existingEntries.map((e) => [e.id, e.product_id]));
       const syncedAt = new Date();
 
-      // Update each entry
+      // Update each entry, snapshotting the conversion factor in effect for
+      // the chosen unit so approval later uses count-time intent, not a live
+      // re-lookup (same pattern as PurchaseOrderItem.unit_conversion_factor).
       for (const update of input.updates) {
+        const productId = productIdByEntryId.get(update.entry_id)!;
+        const { factor } = await resolveUnitFactor(tx, productId, ctx.tenantId!, update.unit);
+
         await tx
           .update(InventoryCountEntry)
           .set({
             counted_qty: update.counted_qty,
             unit: update.unit ?? undefined,
+            unit_conversion_factor: factor,
             last_synced_at: syncedAt,
           })
           .where(eq(InventoryCountEntry.id, update.entry_id));

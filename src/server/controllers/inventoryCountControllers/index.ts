@@ -12,3 +12,4 @@ export * from "./getCountsForReview.ts";
 export * from "./getCountReviewDetail.ts";
 export * from "./adjustCountEntry.ts";
 export * from "./approveCount.ts";
+export * from "./rejectCount.ts";

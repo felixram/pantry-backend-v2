@@ -1,4 +1,4 @@
-import { index, pgTable, timestamp, unique, uuid, varchar } from "drizzle-orm/pg-core";
+import { index, pgTable, text, timestamp, unique, uuid, varchar } from "drizzle-orm/pg-core";
 import { id, createdAt, updatedAt } from "../schemaHelpers.ts";
 import { Location } from "./location.ts";
 import { User } from "./users.ts";
@@ -35,6 +35,12 @@ export const InventoryCountSession = pgTable(
     completed_by: uuid("completed_by").references(() => User.id),
     reviewed_by: uuid("reviewed_by").references(() => User.id),
     suggested_pos_created_at: timestamp("suggested_pos_created_at"),
+    // Reject trail — a rejected session isn't a new/terminal status, it's
+    // sent back to ACTIVE (see rejectCount.ts) with these stamped for audit
+    // and so the counter's UI can show why it came back.
+    rejected_at: timestamp("rejected_at"),
+    rejected_by: uuid("rejected_by").references(() => User.id),
+    rejection_reason: text("rejection_reason"),
     createdAt,
     updatedAt,
   },
@@ -72,6 +78,11 @@ export const InventoryCountSessionRelations = relations(
       fields: [InventoryCountSession.reviewed_by],
       references: [User.id],
       relationName: "sessionReviewer",
+    }),
+    rejectedByUser: one(User, {
+      fields: [InventoryCountSession.rejected_by],
+      references: [User.id],
+      relationName: "sessionRejecter",
     }),
     entries: many(InventoryCountEntry),
   }),

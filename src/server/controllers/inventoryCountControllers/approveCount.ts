@@ -8,7 +8,6 @@ import { Stock } from "../../../db/schema/stock.ts";
 import { StockMovement } from "../../../db/schema/stockMovement.ts";
 import { ProductUnitConversion } from "../../../db/schema/productUnitConversion.ts";
 import {
-  toBaseUnits,
   tryGetFactor,
   type UnitConversion,
 } from "../../../utils/unitConversion.ts";
@@ -48,12 +47,16 @@ export const approveCount = adminMutation
         with: { stock: true },
       });
 
-      // Pre-fetch unit conversions for all products in this count
+      // Pre-fetch unit conversions for all products in this count. Only used
+      // as a fallback for legacy entries with no frozen unit_conversion_factor.
       const productIds = entries.map((e) => e.product_id);
       const allConversions =
         productIds.length > 0
           ? await tx.query.ProductUnitConversion.findMany({
-              where: inArray(ProductUnitConversion.product_id, productIds),
+              where: and(
+                inArray(ProductUnitConversion.product_id, productIds),
+                eq(ProductUnitConversion.tenant_id, ctx.tenantId!),
+              ),
             })
           : [];
 
@@ -77,12 +80,14 @@ export const approveCount = adminMutation
           continue;
         }
 
-        // Convert to base units if a unit was specified
+        // Convert to base units using the factor frozen on the entry when it
+        // was counted — approval should honor count-time intent even if the
+        // product's conversion factor was edited since. Only legacy rows
+        // (recorded before this column existed) fall back to a live lookup.
         const productConversions = conversionsByProduct.get(entry.product_id) ?? [];
-        const conversionFactor = tryGetFactor(productConversions, entry.unit) ?? 1;
-        const qtyInBaseUnits = entry.unit && conversionFactor !== 1
-          ? toBaseUnits(effectiveQty, productConversions, entry.unit)
-          : effectiveQty;
+        const conversionFactor =
+          entry.unit_conversion_factor ?? tryGetFactor(productConversions, entry.unit) ?? 1;
+        const qtyInBaseUnits = effectiveQty * conversionFactor;
 
         const variance = qtyInBaseUnits - entry.expected_qty;
 
@@ -106,14 +111,20 @@ export const approveCount = adminMutation
           });
         }
 
-        // Set stock qty to counted/reviewed value in base units. Tenant
-        // guard added for defense in depth — entry.stock_id is trusted
+        // Apply the variance as an atomic delta rather than overwriting qty
+        // outright — a flat `.set({ qty: qtyInBaseUnits })` would silently
+        // discard any stock movement that happened between the count
+        // snapshot and this approval (a delivery received, a sale), even
+        // though the StockMovement logged above implies a reconciliation.
+        // Tenant guard is defense in depth — entry.stock_id is trusted
         // transitively via the already tenant-scoped session lookup above,
         // but every other Stock write in the codebase scopes explicitly.
-        await tx
-          .update(Stock)
-          .set({ qty: qtyInBaseUnits })
-          .where(and(eq(Stock.id, entry.stock_id), eq(Stock.tenant_id, ctx.tenantId!)));
+        if (variance !== 0) {
+          await tx
+            .update(Stock)
+            .set({ qty: sql`${Stock.qty} + ${variance}` })
+            .where(and(eq(Stock.id, entry.stock_id), eq(Stock.tenant_id, ctx.tenantId!)));
+        }
 
         adjustedItems++;
       }

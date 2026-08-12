@@ -61,6 +61,12 @@ export const getCountReviewDetail = adminProcedure
           : "Unknown",
         submitted_at: session.submitted_at,
         status: session.status,
+        // Non-blocking signal for the review UI: the same elevated user who
+        // counted this session is the one viewing it now. Deliberately not
+        // enforced server-side (would lock up single-manager locations) —
+        // informational only, matching this app's supplier minimum-order
+        // amount pattern.
+        is_self_reviewed: session.completed_by === ctx.user!.id,
       },
       entries: session.entries.map((e) => {
         // expected_qty is stored in base units (it's a snapshot of Stock.qty),

@@ -2,7 +2,7 @@ import z from "zod";
 import { adminMutation } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
 import { Stock } from "../../../db/schema/stock.ts";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { ROLES } from "../../../types/user.ts";
 
 export const restoreStock = adminMutation
@@ -12,8 +12,15 @@ export const restoreStock = adminMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     const stock = await ctx.db.query.Stock.findFirst({
-      where: eq(Stock.id, input.stock_id),
+      where: and(eq(Stock.id, input.stock_id), eq(Stock.tenant_id, ctx.tenantId)),
     });
 
     if (!stock) {
@@ -44,7 +51,7 @@ export const restoreStock = adminMutation
     const [restored] = await ctx.db
       .update(Stock)
       .set({ deletedAt: null })
-      .where(eq(Stock.id, input.stock_id))
+      .where(and(eq(Stock.id, input.stock_id), eq(Stock.tenant_id, ctx.tenantId)))
       .returning();
 
     return {

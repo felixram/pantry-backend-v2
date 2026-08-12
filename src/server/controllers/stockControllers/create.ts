@@ -32,7 +32,7 @@ export const createStock = authedMutation
     return await ctx.db.transaction(async (tx) => {
       // Validate product exists
       const product = await tx.query.Product.findFirst({
-        where: eq(Product.id, input.product_id),
+        where: and(eq(Product.id, input.product_id), eq(Product.tenant_id, ctx.tenantId!)),
       });
 
       if (!product) {
@@ -44,7 +44,7 @@ export const createStock = authedMutation
 
       // Validate location exists
       const location = await tx.query.Location.findFirst({
-        where: eq(Location.id, input.location_id),
+        where: and(eq(Location.id, input.location_id), eq(Location.tenant_id, ctx.tenantId!)),
       });
 
       if (!location) {
@@ -71,11 +71,21 @@ export const createStock = authedMutation
       const baseMinimum = input.minimumStockLevel != null ? convert(input.minimumStockLevel) : 0;
       const baseParLevel = input.parLevel != null ? convert(input.parLevel) : null;
 
+      // Same par >= minimum rule enforced by setParLevel — reject inconsistent
+      // levels at creation time too, not just on later updates.
+      if (baseParLevel != null && baseParLevel < baseMinimum) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Par level cannot be less than minimum stock level",
+        });
+      }
+
       // Check if stock already exists for this product/location combination
       const existingStock = await tx.query.Stock.findFirst({
         where: and(
           eq(Stock.location_id, input.location_id),
-          eq(Stock.productId, input.product_id)
+          eq(Stock.productId, input.product_id),
+          eq(Stock.tenant_id, ctx.tenantId!)
         ),
       });
 
@@ -109,6 +119,7 @@ export const createStock = authedMutation
         product_id: input.product_id,
         location_id: input.location_id,
         change_qty: baseQty,
+        movement_type: "INITIAL",
         reason,
         user_id: ctx.user!.id,
         tenant_id: ctx.tenantId!,

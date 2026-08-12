@@ -7,6 +7,7 @@ import { ProductUnitConversion } from "../../../db/schema/productUnitConversion.
 import { eq, and, lte, sql, ilike, isNull, isNotNull, or, desc, inArray } from "drizzle-orm";
 import { getLocationFilter } from "../../../utils/locationFilter.ts";
 import { TRPCError } from "@trpc/server";
+import { computeStockStatus } from "../../../utils/stockStatus.ts";
 
 export const getAllStock = authedProcedure
   .input(
@@ -21,7 +22,10 @@ export const getAllStock = authedProcedure
       archived: z.boolean().optional(),
       limit: z.number().optional().default(10),
       offset: z.number().optional().default(0),
-      mode: z.enum(["list", "full"]).optional().default("full"),
+      // "list" (SQL-pushed-down, paginated) is the default and the only
+      // path any v2 caller uses today — "full" (unpaginated, JS-filtered,
+      // no ORDER BY) is kept only for backward compatibility.
+      mode: z.enum(["list", "full"]).optional().default("list"),
     }),
   )
   .query(async ({ ctx, input }) => {
@@ -88,10 +92,13 @@ export const getAllStock = authedProcedure
         );
       }
 
-      // Status filter via SQL CASE WHEN
+      // Status filter via SQL CASE WHEN — mirrors computeStockStatus()
+      // (utils/stockStatus.ts) exactly, including the expectedUsage-adjusted
+      // threshold, so this SQL-pushed-down path and every JS caller of the
+      // shared helper agree on what "LOW" means.
       const statusExpr = sql`CASE
         WHEN ${Stock.qty} = 0 THEN 'OUT_OF_STOCK'
-        WHEN ${Stock.minimumStockLevel} IS NOT NULL AND ${Stock.qty} <= ${Stock.minimumStockLevel} THEN 'LOW'
+        WHEN ${Stock.minimumStockLevel} IS NOT NULL AND (${Stock.qty} - COALESCE(${Stock.expectedUsage}, 0)) <= ${Stock.minimumStockLevel} THEN 'LOW'
         ELSE 'OK'
       END`;
 
@@ -142,7 +149,7 @@ export const getAllStock = authedProcedure
       const statsQuery = ctx.db
         .select({
           total: sql<number>`COUNT(*)`,
-          low: sql<number>`COUNT(*) FILTER (WHERE ${Stock.minimumStockLevel} IS NOT NULL AND ${Stock.qty} <= ${Stock.minimumStockLevel} AND ${Stock.qty} > 0)`,
+          low: sql<number>`COUNT(*) FILTER (WHERE ${Stock.minimumStockLevel} IS NOT NULL AND (${Stock.qty} - COALESCE(${Stock.expectedUsage}, 0)) <= ${Stock.minimumStockLevel} AND ${Stock.qty} > 0)`,
           outOfStock: sql<number>`COUNT(*) FILTER (WHERE ${Stock.qty} = 0)`,
         })
         .from(Stock)
@@ -221,9 +228,13 @@ export const getAllStock = authedProcedure
       };
     }
 
-    // Full mode: eager-load all relations
+    // Full mode: eager-load all relations. Kept only for backward
+    // compatibility (no v2 caller uses it) — "list" above is the scalable,
+    // SQL-pushed-down path and is now the default. ORDER BY added so
+    // pagination is at least stable across calls, which it wasn't before.
     const stocks = await ctx.db.query.Stock.findMany({
       where: conditions.length > 0 ? and(...conditions) : undefined,
+      orderBy: (stock, { desc }) => [desc(stock.createdAt)],
       with: {
         product: {
           with: {
@@ -259,25 +270,10 @@ export const getAllStock = authedProcedure
     }
 
     // Calculate status for each stock
-    const stocksWithStatus = filteredStocks.map((stock) => {
-      let status: "OK" | "LOW" | "OUT_OF_STOCK";
-
-      if (stock.qty === 0) {
-        status = "OUT_OF_STOCK";
-      } else if (
-        stock.minimumStockLevel &&
-        stock.qty <= stock.minimumStockLevel
-      ) {
-        status = "LOW";
-      } else {
-        status = "OK";
-      }
-
-      return {
-        ...stock,
-        status,
-      };
-    });
+    const stocksWithStatus = filteredStocks.map((stock) => ({
+      ...stock,
+      status: computeStockStatus(stock),
+    }));
 
     // Apply status filter if provided
     const statusFilteredStocks = input.status

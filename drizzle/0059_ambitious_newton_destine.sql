@@ -1,0 +1,1 @@
+ALTER TABLE "stock_movement" ADD COLUMN "movement_type" varchar(20);

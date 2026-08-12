@@ -3,7 +3,7 @@ import { authedMutation } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
 import { Stock } from "../../../db/schema/stock.ts";
 import { StockMovement } from "../../../db/schema/stockMovement.ts";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { toBaseUnits } from "../../../utils/unitConversion.ts";
 import { resolveUnitFactor } from "../../../utils/loadUnitConversions.ts";
@@ -28,7 +28,7 @@ export const adjustStock = authedMutation
     return await ctx.db.transaction(async (tx) => {
       // Get current stock
       const stock = await tx.query.Stock.findFirst({
-        where: eq(Stock.id, input.stock_id),
+        where: and(eq(Stock.id, input.stock_id), eq(Stock.tenant_id, ctx.tenantId!)),
       });
 
       if (!stock) {
@@ -59,17 +59,29 @@ export const adjustStock = authedMutation
         ? toBaseUnits(input.change_qty, conversions, input.unit_name)
         : input.change_qty;
 
-      // Validate won't go negative
-      const newQty = stock.qty + baseChangeQty;
-      if (newQty < 0) {
+      // Atomic conditional update: the negative-qty check and the write
+      // happen in one statement, closing the lost-update race a
+      // read-then-compute-then-write sequence would have (two concurrent
+      // adjustments against the same row could otherwise both read the same
+      // starting qty and the second write would silently clobber the first).
+      const [updated] = await tx
+        .update(Stock)
+        .set({ qty: sql`${Stock.qty} + ${baseChangeQty}` })
+        .where(
+          and(
+            eq(Stock.id, input.stock_id),
+            eq(Stock.tenant_id, ctx.tenantId!),
+            sql`${Stock.qty} + ${baseChangeQty} >= 0`
+          )
+        )
+        .returning();
+
+      if (!updated) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Insufficient stock. Available: ${stock.qty}, requested change: ${baseChangeQty}`,
         });
       }
-
-      // Update stock
-      await tx.update(Stock).set({ qty: newQty }).where(eq(Stock.id, input.stock_id));
 
       // Log movement with unit info
       const sign = input.change_qty >= 0 ? "+" : "";
@@ -81,6 +93,7 @@ export const adjustStock = authedMutation
         product_id: stock.productId!,
         location_id: stock.location_id!,
         change_qty: baseChangeQty,
+        movement_type: "ADJUSTMENT",
         reason,
         user_id: ctx.user!.id,
         tenant_id: ctx.tenantId!,
@@ -89,7 +102,7 @@ export const adjustStock = authedMutation
       return {
         message: "Stock adjusted successfully",
         old_qty: stock.qty,
-        new_qty: newQty,
+        new_qty: updated.qty,
         change: baseChangeQty,
       };
     });

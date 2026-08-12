@@ -1,4 +1,4 @@
-import { index, pgTable, real, text, uuid } from "drizzle-orm/pg-core";
+import { index, pgTable, real, text, uuid, varchar } from "drizzle-orm/pg-core";
 import { id, createdAt, updatedAt, deletedAt } from "../schemaHelpers.ts";
 import { Product } from "./product.ts";
 import { Location } from "./location.ts";
@@ -16,6 +16,10 @@ export const StockMovement = pgTable(
       .notNull()
       .references(() => Tenant.id),
     change_qty: real().notNull(),
+    // Nullable — historical rows predate this column. New writes should
+    // always set one of: ADJUSTMENT, TRANSFER_IN, TRANSFER_OUT, PO_RECEIVE,
+    // COUNT_ADJUSTMENT, INITIAL.
+    movement_type: varchar("movement_type", { length: 20 }),
     reason: text(),
     user_id: uuid().references(() => User.id, { onDelete: "set null" }),
     createdAt,

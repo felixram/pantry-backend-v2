@@ -1,7 +1,7 @@
 import type { ExtractTablesWithRelations } from "drizzle-orm";
 import type { PgTransaction } from "drizzle-orm/pg-core";
 import type { PostgresJsQueryResultHKT } from "drizzle-orm/postgres-js";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { PurchaseOrderItem } from "../../../../db/schema/purchaseOrderItem.ts";
 import { PurchaseOrderAudit } from "../../../../db/schema/purchaseOrder_audit_log.ts";
 import { Stock } from "../../../../db/schema/stock.ts";
@@ -84,7 +84,7 @@ export async function receivePurchaseOrder(
 
   // 2. Pre-fetch all existing stock at destination location (avoid N+1 queries)
   const existingStocks = await tx.query.Stock.findMany({
-    where: eq(Stock.location_id, destinationLocationId),
+    where: and(eq(Stock.location_id, destinationLocationId), eq(Stock.tenant_id, tenantId)),
   });
 
   // Create a map for O(1) lookups: productId -> Stock
@@ -145,40 +145,36 @@ export async function receivePurchaseOrder(
 
     // Only update stock if received qty > 0
     if (actualReceivedQty > 0) {
-      // Check if stock record exists for this product at this location (O(1) lookup)
+      // Snapshot for the returned summary only — the actual write below is
+      // atomic and doesn't depend on this value.
       const existingStock = stockByProductId.get(item.product_id);
+      const oldQty = existingStock?.qty ?? 0;
 
-      if (existingStock) {
-        // Stock exists - update quantity (in base units)
-        const oldQty = existingStock.qty;
-        const newQty = oldQty + baseQtyToAdd;
-
-        await tx
-          .update(Stock)
-          .set({ qty: newQty })
-          .where(eq(Stock.id, existingStock.id));
-
-        stockUpdates.push({
-          productId: item.product_id,
-          oldQty,
-          newQty,
-        });
-      } else {
-        // Stock doesn't exist - create new record (in base units)
-        await tx.insert(Stock).values({
+      // Atomic upsert — one statement for both "stock row exists, increment
+      // it" and "no row yet, create it," closing the lost-update race the
+      // previous read-a-snapshot-then-write sequence had (concurrent
+      // receives/adjustments against the same row could otherwise clobber
+      // each other), same pattern as transferStock's destination write.
+      const [updated] = await tx
+        .insert(Stock)
+        .values({
           location_id: destinationLocationId,
           productId: item.product_id,
           qty: baseQtyToAdd,
-          minimumStockLevel: 0, // Default minimum stock level
+          minimumStockLevel: 0,
           tenant_id: tenantId,
-        });
+        })
+        .onConflictDoUpdate({
+          target: [Stock.location_id, Stock.productId],
+          set: { qty: sql`${Stock.qty} + ${baseQtyToAdd}` },
+        })
+        .returning();
 
-        stockUpdates.push({
-          productId: item.product_id,
-          oldQty: 0,
-          newQty: baseQtyToAdd,
-        });
-      }
+      stockUpdates.push({
+        productId: item.product_id,
+        oldQty,
+        newQty: updated?.qty ?? oldQty + baseQtyToAdd,
+      });
 
       // Log stock movement for audit trail
       const conversionInfo = conversionFactor > 1
@@ -191,6 +187,7 @@ export async function receivePurchaseOrder(
         product_id: item.product_id,
         location_id: destinationLocationId,
         change_qty: baseQtyToAdd,
+        movement_type: "PO_RECEIVE",
         reason: `Purchase Order #${purchaseOrderId} received${reasonSuffix}${conversionInfo}`,
         user_id: userId,
         tenant_id: tenantId,

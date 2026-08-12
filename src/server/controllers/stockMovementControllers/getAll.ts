@@ -1,7 +1,7 @@
 import z from "zod";
 import { adminProcedure } from "../../trpc.ts";
 import { StockMovement } from "../../../db/schema/stockMovement.ts";
-import { eq, and, gte, lte, desc, sql, getTableColumns } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, getTableColumns, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { ROLES } from "../../../types/user.ts";
 
@@ -73,7 +73,7 @@ export const getAllStockMovements = adminProcedure
     let movementsWithRelations: any[] = [];
     if (movementIds.length > 0) {
       movementsWithRelations = await ctx.db.query.StockMovement.findMany({
-        where: sql`${StockMovement.id} IN ${movementIds}`,
+        where: inArray(StockMovement.id, movementIds),
         with: {
           user: true,
           products: true,

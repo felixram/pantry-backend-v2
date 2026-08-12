@@ -13,10 +13,17 @@ export const getStockMovementsByProduct = adminProcedure
       limit: z.number().min(1).max(1000).default(100),
     })
   )
-  .mutation(async ({ ctx, input }) => {
+  .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     // Validate product exists
     const product = await ctx.db.query.Product.findFirst({
-      where: eq(Product.id, input.product_id),
+      where: and(eq(Product.id, input.product_id), eq(Product.tenant_id, ctx.tenantId)),
     });
 
     if (!product) {
@@ -31,9 +38,10 @@ export const getStockMovementsByProduct = adminProcedure
       ctx.user!.role === ROLES.manager && ctx.userLocationId
         ? and(
             eq(StockMovement.product_id, input.product_id),
+            eq(StockMovement.tenant_id, ctx.tenantId),
             eq(StockMovement.location_id, ctx.userLocationId)
           )
-        : eq(StockMovement.product_id, input.product_id);
+        : and(eq(StockMovement.product_id, input.product_id), eq(StockMovement.tenant_id, ctx.tenantId));
 
     const movements = await ctx.db.query.StockMovement.findMany({
       where: whereClause,

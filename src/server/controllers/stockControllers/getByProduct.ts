@@ -1,7 +1,10 @@
 import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
+import { TRPCError } from "@trpc/server";
 import { Stock } from "../../../db/schema/stock.ts";
 import { eq, and, isNull } from "drizzle-orm";
+import { getLocationFilter } from "../../../utils/locationFilter.ts";
+import { computeStockStatus } from "../../../utils/stockStatus.ts";
 
 export const getStockByProduct = authedProcedure
   .input(
@@ -11,9 +14,28 @@ export const getStockByProduct = authedProcedure
       offset: z.number().min(0).default(0),
     }),
   )
-  .mutation(async ({ ctx, input }) => {
+  .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
+    // Previously had no tenant check and no location-access enforcement at
+    // all — any authenticated user of any tenant/role could see any
+    // product's stock across every location. Location-scoped roles now get
+    // silently filtered to their own location, same as every other
+    // location-aware list procedure.
+    const locationFilter = getLocationFilter(ctx.user!, ctx.userLocationId);
+
     const stocks = await ctx.db.query.Stock.findMany({
-      where: and(eq(Stock.productId, input.product_id), isNull(Stock.deletedAt)),
+      where: and(
+        eq(Stock.productId, input.product_id),
+        eq(Stock.tenant_id, ctx.tenantId),
+        locationFilter ? eq(Stock.location_id, locationFilter) : undefined,
+        isNull(Stock.deletedAt)
+      ),
       with: {
         location: true,
         product: true,
@@ -23,23 +45,10 @@ export const getStockByProduct = authedProcedure
     });
 
     return {
-      stocks: stocks.map((stock) => {
-        let status: "OK" | "LOW" | "OUT_OF_STOCK";
-        if (stock.qty === 0) {
-          status = "OUT_OF_STOCK";
-        } else if (
-          stock.minimumStockLevel &&
-          stock.qty <= stock.minimumStockLevel
-        ) {
-          status = "LOW";
-        } else {
-          status = "OK";
-        }
-        return {
-          ...stock,
-          status,
-        };
-      }),
+      stocks: stocks.map((stock) => ({
+        ...stock,
+        status: computeStockStatus(stock),
+      })),
       total: stocks.length,
     };
   });

@@ -2,8 +2,9 @@ import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
 import { Stock } from "../../../db/schema/stock.ts";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
+import { computeStockStatus } from "../../../utils/stockStatus.ts";
 
 export const getStockById = authedProcedure
   .input(
@@ -11,9 +12,16 @@ export const getStockById = authedProcedure
       id: z.string(),
     }),
   )
-  .mutation(async ({ ctx, input }) => {
+  .query(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      });
+    }
+
     const stock = await ctx.db.query.Stock.findFirst({
-      where: eq(Stock.id, input.id),
+      where: and(eq(Stock.id, input.id), eq(Stock.tenant_id, ctx.tenantId)),
       with: {
         product: {
           with: {
@@ -36,22 +44,8 @@ export const getStockById = authedProcedure
       validateLocationAccess(ctx.user!, ctx.userLocationId, stock.location_id);
     }
 
-    // Calculate status
-    let status: "OK" | "LOW" | "OUT_OF_STOCK";
-
-    if (stock.qty === 0) {
-      status = "OUT_OF_STOCK";
-    } else if (
-      stock.minimumStockLevel &&
-      stock.qty <= stock.minimumStockLevel
-    ) {
-      status = "LOW";
-    } else {
-      status = "OK";
-    }
-
     return {
       ...stock,
-      status,
+      status: computeStockStatus(stock),
     };
   });

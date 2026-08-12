@@ -98,6 +98,7 @@ export const approveCount = adminMutation
             location_id: session.location_id,
             tenant_id: ctx.tenantId!,
             change_qty: variance,
+            movement_type: "COUNT_ADJUSTMENT",
             reason: entry.unit
               ? `Inventory count adjustment – ${session.week_identifier} (${entry.unit})${conversionInfo}${reviewNote}`
               : `Inventory count adjustment – ${session.week_identifier}${reviewNote}`,
@@ -105,11 +106,14 @@ export const approveCount = adminMutation
           });
         }
 
-        // Set stock qty to counted/reviewed value in base units
+        // Set stock qty to counted/reviewed value in base units. Tenant
+        // guard added for defense in depth — entry.stock_id is trusted
+        // transitively via the already tenant-scoped session lookup above,
+        // but every other Stock write in the codebase scopes explicitly.
         await tx
           .update(Stock)
           .set({ qty: qtyInBaseUnits })
-          .where(eq(Stock.id, entry.stock_id));
+          .where(and(eq(Stock.id, entry.stock_id), eq(Stock.tenant_id, ctx.tenantId!)));
 
         adjustedItems++;
       }

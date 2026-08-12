@@ -5,6 +5,10 @@ import { eq, and, lte, sql, isNotNull, isNull } from "drizzle-orm";
 import { getLocationFilter } from "../../../utils/locationFilter.ts";
 import { TRPCError } from "@trpc/server";
 
+// Severity is "critical" once shortage exceeds this fraction of the
+// configured minimum stock level, otherwise "warning".
+const CRITICAL_SHORTAGE_RATIO = 0.5;
+
 export const lowStockReport = authedProcedure
   .input(
     z.object({
@@ -41,6 +45,10 @@ export const lowStockReport = authedProcedure
       conditions.push(eq(Stock.location_id, locationFilter));
     }
 
+    // No DB-level limit/offset here — the matching set (stock at or below
+    // its minimum) is inherently small, and severity/sort need to run over
+    // the *complete* matching set before pagination is applied below,
+    // otherwise "most critical first" isn't actually true past page 1.
     const lowStockItems = await ctx.db.query.Stock.findMany({
       where: and(...conditions),
       with: {
@@ -54,8 +62,6 @@ export const lowStockReport = authedProcedure
           columns: { id: true, name: true, deletedAt: true },
         },
       },
-      limit: input.limit,
-      offset: input.offset,
     });
 
     // Filter out stocks with deleted locations
@@ -64,8 +70,7 @@ export const lowStockReport = authedProcedure
     // Calculate shortage and severity for each item
     const report = activeStockItems.map((stock) => {
       const shortage = (stock.minimumStockLevel || 0) - stock.qty;
-      // Severity: "critical" if shortage > 50% of minimum level, otherwise "warning"
-      const isCritical = shortage > (stock.minimumStockLevel || 0) * 0.5;
+      const isCritical = shortage > (stock.minimumStockLevel || 0) * CRITICAL_SHORTAGE_RATIO;
       return {
         ...stock,
         shortage,
@@ -91,10 +96,18 @@ export const lowStockReport = authedProcedure
       report.sort((a, b) => b.shortage - a.shortage);
     }
 
+    // Pagination applied after sorting — the DB fetch above deliberately
+    // has no LIMIT/OFFSET, so "most critical first" is true across the
+    // whole result set, not just within whatever page happened to be
+    // fetched from the database.
+    const paginatedReport = report.slice(input.offset, input.offset + input.limit);
+
     return {
-      items: report,
+      items: paginatedReport,
       total: report.length,
-      critical_count: report.filter((item) => item.qty === 0).length,
+      // Was `item.qty === 0` (out-of-stock count) despite the field name —
+      // now actually counts items classified "critical" above.
+      critical_count: report.filter((item) => item.severity === "critical").length,
       pagination: {
         limit: input.limit,
         offset: input.offset,

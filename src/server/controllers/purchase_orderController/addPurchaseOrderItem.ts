@@ -14,6 +14,7 @@ import {
   isTerminalStatusForRole,
   canEditUnlockedPO,
 } from "./helpers/permissionMatrix.ts";
+import { resolveUnitFactor } from "../../../utils/loadUnitConversions.ts";
 
 export const addPurchaseOrderItem = authedMutation
   .input(
@@ -85,7 +86,7 @@ export const addPurchaseOrderItem = authedMutation
 
       // 3. Verify product exists
       const product = await tx.query.Product.findFirst({
-        where: eq(Product.id, input.product_id),
+        where: and(eq(Product.id, input.product_id), eq(Product.tenant_id, ctx.tenantId!)),
       });
 
       if (!product) {
@@ -94,6 +95,15 @@ export const addPurchaseOrderItem = authedMutation
           message: `Product with id ${input.product_id} not found`,
         });
       }
+
+      // 3.1. Resolve the unit's conversion factor (also validates the unit
+      // exists for this product) and snapshot it for receiving later.
+      const { factor: unitConversionFactor } = await resolveUnitFactor(
+        tx,
+        input.product_id,
+        ctx.tenantId!,
+        input.unit
+      );
 
       // 4. Check if product already exists in this PO
       const existingItem = purchaseOrder.purchaseOrderItems.find(
@@ -116,6 +126,7 @@ export const addPurchaseOrderItem = authedMutation
           qty: input.qty,
           unit_price: input.unit_price,
           unit: input.unit,
+          unit_conversion_factor: unitConversionFactor,
         })
         .returning();
 

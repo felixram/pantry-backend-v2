@@ -215,7 +215,7 @@ export const updatePurchaseOrder = authedMutation
         // Validate all products exist
         for (const item of input.items) {
           const product = await tx.query.Product.findFirst({
-            where: eq(Product.id, item.product_id),
+            where: and(eq(Product.id, item.product_id), eq(Product.tenant_id, ctx.tenantId!)),
           });
 
           if (!product) {
@@ -239,13 +239,15 @@ export const updatePurchaseOrder = authedMutation
             ),
           );
 
-        // Insert new items
+        // Insert new items. This path's input never accepts a `unit`, so the
+        // qty is always base-unit-equivalent — factor 1.
         await tx.insert(PurchaseOrderItem).values(
           input.items.map((item) => ({
             purchase_order_id: input.purchaseOrderId,
             product_id: item.product_id,
             qty: item.qty,
             unit_price: item.unit_price,
+            unit_conversion_factor: 1,
           })),
         );
 

@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   index,
   pgTable,
   real,
@@ -10,7 +11,7 @@ import {
 import { id, createdAt, updatedAt } from "../schemaHelpers.ts"
 import { Product } from "./product.ts"
 import { Tenant } from "./tenant.ts"
-import { relations } from "drizzle-orm"
+import { relations, sql } from "drizzle-orm"
 
 export const ProductUnitConversion = pgTable(
   "product_unit_conversion",
@@ -33,6 +34,13 @@ export const ProductUnitConversion = pgTable(
     index().on(t.product_id),
     index().on(t.tenant_id),
     uniqueIndex().on(t.product_id, t.unit_name),
+    // Both invariants were previously enforced only by upsertConversions'
+    // application-layer validation — these are DB-level backstops in case
+    // any other write path is ever added.
+    check("positive_conversion_factor", sql`${t.conversion_factor} > 0`),
+    uniqueIndex("one_base_unit_per_product")
+      .on(t.product_id)
+      .where(sql`${t.is_base_unit} = true`),
   ],
 )
 

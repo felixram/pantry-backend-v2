@@ -1,7 +1,7 @@
 import z from "zod";
 import { authedMutation } from "../../trpc.ts";
 import { Product } from "../../../db/schema/product.ts";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
@@ -9,6 +9,7 @@ import { generatePONumber } from "../../../utils/generatePONumber.ts";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { hasElevatedRole } from "../../../types/user.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
+import { resolveUnitFactor } from "../../../utils/loadUnitConversions.ts";
 
 export const createPurchaseOrderWithItems = authedMutation
   .input(
@@ -46,7 +47,10 @@ export const createPurchaseOrderWithItems = authedMutation
       // Validate all products exist
       for (const item of input.items) {
         const product = await tx.query.Product.findFirst({
-          where: eq(Product.id, item.product_id),
+          where: and(
+            eq(Product.id, item.product_id),
+            eq(Product.tenant_id, ctx.tenantId!)
+          ),
         });
 
         if (!product) {
@@ -97,16 +101,28 @@ export const createPurchaseOrderWithItems = authedMutation
         });
       }
 
-      // Add all items in a single transaction
-      await tx.insert(PurchaseOrderItem).values(
-        input.items.map((item) => ({
-          purchase_order_id: newPurchaseOrder.id,
-          product_id: item.product_id,
-          qty: item.qty,
-          unit_price: item.unit_price,
-          unit: item.unit,
-        }))
+      // Add all items in a single transaction, snapshotting each item's
+      // conversion factor so receiving later uses order-time intent.
+      const itemsWithFactor = await Promise.all(
+        input.items.map(async (item) => {
+          const { factor } = await resolveUnitFactor(
+            tx,
+            item.product_id,
+            ctx.tenantId!,
+            item.unit
+          );
+          return {
+            purchase_order_id: newPurchaseOrder.id,
+            product_id: item.product_id,
+            qty: item.qty,
+            unit_price: item.unit_price,
+            unit: item.unit,
+            unit_conversion_factor: factor,
+          };
+        })
       );
+
+      await tx.insert(PurchaseOrderItem).values(itemsWithFactor);
 
       // Update defaultUnit for each product (last used unit becomes default)
       for (const item of input.items) {

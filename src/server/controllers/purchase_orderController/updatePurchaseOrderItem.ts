@@ -14,6 +14,7 @@ import {
   isTerminalStatusForRole,
   canEditUnlockedPO,
 } from "./helpers/permissionMatrix.ts";
+import { resolveUnitFactor } from "../../../utils/loadUnitConversions.ts";
 
 export const updatePurchaseOrderItem = authedMutation
   .input(
@@ -119,12 +120,22 @@ export const updatePurchaseOrderItem = authedMutation
         input.unit_price !== undefined ? input.unit_price : item.unit_price;
       const newUnit = input.unit !== undefined ? input.unit : item.unit;
 
+      // Re-resolve the conversion factor for the item's current unit, so the
+      // snapshot always reflects what "qty" now means, up until it's received.
+      const { factor: unitConversionFactor } = await resolveUnitFactor(
+        tx,
+        item.product_id,
+        ctx.tenantId!,
+        newUnit
+      );
+
       const updatedItem = await tx
         .update(PurchaseOrderItem)
         .set({
           qty: newQty,
           unit_price: newUnitPrice,
           unit: newUnit,
+          unit_conversion_factor: unitConversionFactor,
         })
         .where(eq(PurchaseOrderItem.id, input.itemId))
         .returning();

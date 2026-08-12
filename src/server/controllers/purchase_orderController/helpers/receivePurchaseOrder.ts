@@ -8,7 +8,6 @@ import { Stock } from "../../../../db/schema/stock.ts";
 import { StockMovement } from "../../../../db/schema/stockMovement.ts";
 import { ProductUnitConversion } from "../../../../db/schema/productUnitConversion.ts";
 import {
-  toBaseUnits,
   tryGetFactor,
   type UnitConversion,
 } from "../../../../utils/unitConversion.ts";
@@ -69,10 +68,14 @@ export async function receivePurchaseOrder(
     receivedItems?.map((item) => [item.itemId, item]) || []
   );
 
-  // Pre-fetch unit conversions for all products in this PO, indexed by productId
+  // Pre-fetch unit conversions for all products in this PO, indexed by productId.
+  // Only used as a fallback for legacy items with no frozen unit_conversion_factor.
   const productIds = orderItems.map(item => item.product_id);
   const allConversions = await tx.query.ProductUnitConversion.findMany({
-    where: inArray(ProductUnitConversion.product_id, productIds),
+    where: and(
+      inArray(ProductUnitConversion.product_id, productIds),
+      eq(ProductUnitConversion.tenant_id, tenantId),
+    ),
   });
 
   const conversionsByProduct = new Map<string, UnitConversion[]>();
@@ -114,13 +117,14 @@ export async function receivePurchaseOrder(
     const actualReceivedQty = receivedItemData?.receivedQty ?? item.qty;
     const itemNotes = receivedItemData?.notes;
 
-    // Convert received qty to base units. Falls back to qty as-is when the
-    // PO item has no unit (legacy data) or the unit is missing from conversions.
+    // Convert received qty to base units using the factor frozen on the item
+    // at order time — receiving should honor order-time intent even if the
+    // product's conversion factor was edited since. Only legacy rows (created
+    // before this column existed) fall back to a live conversions lookup.
     const productConversions = conversionsByProduct.get(item.product_id) ?? [];
-    const conversionFactor = tryGetFactor(productConversions, item.unit) ?? 1;
-    const baseQtyToAdd = item.unit && conversionFactor !== 1
-      ? toBaseUnits(actualReceivedQty, productConversions, item.unit)
-      : actualReceivedQty;
+    const conversionFactor =
+      item.unit_conversion_factor ?? tryGetFactor(productConversions, item.unit) ?? 1;
+    const baseQtyToAdd = actualReceivedQty * conversionFactor;
 
     // Track discrepancies
     if (actualReceivedQty !== item.qty) {

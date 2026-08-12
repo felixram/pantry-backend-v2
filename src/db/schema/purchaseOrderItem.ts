@@ -16,6 +16,12 @@ export const PurchaseOrderItem = pgTable(
       .notNull(),
     qty: real().notNull(),
     unit_price: real(),
+    // Conversion factor ("1 <unit> = N base units") in effect when this item
+    // was last created/edited — frozen so receiving uses order-time intent,
+    // not whatever the product's conversion factor happens to be by then.
+    // Nullable: rows predate this column, and the bulk item-replace path
+    // never accepted a unit at all (stored as 1, base-unit-equivalent).
+    unit_conversion_factor: real(),
     // Quantity actually received (set during receiving workflow)
     // If null, the order has not been received yet
     // If different from qty, indicates a discrepancy

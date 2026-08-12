@@ -1,0 +1,3 @@
+ALTER TABLE "purchase_order_item" ADD COLUMN "unit_conversion_factor" real;--> statement-breakpoint
+CREATE UNIQUE INDEX "one_base_unit_per_product" ON "product_unit_conversion" USING btree ("product_id") WHERE "product_unit_conversion"."is_base_unit" = true;--> statement-breakpoint
+ALTER TABLE "product_unit_conversion" ADD CONSTRAINT "positive_conversion_factor" CHECK ("product_unit_conversion"."conversion_factor" > 0);

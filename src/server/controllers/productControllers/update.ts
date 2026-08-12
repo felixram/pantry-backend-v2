@@ -98,7 +98,7 @@ export const updateProductProcedure = authedMutation
         await tx
           .update(Product)
           .set(productUpdates)
-          .where(eq(Product.id, input.productId));
+          .where(and(eq(Product.id, input.productId), eq(Product.tenant_id, ctx.tenantId!)));
       }
 
       // Version (price/description) changes must land — and activeVersionId
@@ -169,7 +169,7 @@ export const updateProductProcedure = authedMutation
           .set({
             activeVersionId: newVersion?.id,
           })
-          .where(eq(Product.id, input.productId));
+          .where(and(eq(Product.id, input.productId), eq(Product.tenant_id, ctx.tenantId!)));
       }
 
       // Sync unit conversion entries (+ Product.unit) when the unit array is

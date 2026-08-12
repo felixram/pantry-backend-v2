@@ -407,6 +407,13 @@
       "when": 1786377327828,
       "tag": "0057_curious_bloodstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1786538876204,
+      "tag": "0058_daily_warhawk",
+      "breakpoints": true
     }
   ]
 }

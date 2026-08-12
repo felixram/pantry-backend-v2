@@ -15,6 +15,7 @@ export const Supplier = pgTable(
     email: text(),
     address: text(),
     delivery_days: text(),
+    minimum_order_amount: real(),
     free_shipping_minimum: real(),
     shipping_fee: real(),
     supplier_type: varchar("supplier_type", { length: 20 })

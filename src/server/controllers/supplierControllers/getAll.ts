@@ -13,7 +13,9 @@ export const getAllSupplierProcedure = authedProcedure
       offset: z.number().optional().default(0),
       sortByType: z.enum(["asc", "desc"]).optional(),
       supplier_type: z.enum(["PRIMARY", "SECONDARY"]).optional(),
-      columns: z.array(z.enum(["id", "name"])).optional(),
+      columns: z
+        .array(z.enum(["id", "name", "minimum_order_amount", "free_shipping_minimum", "shipping_fee"]))
+        .optional(),
     })
   )
   .query(async ({ ctx, input }) => {
@@ -38,6 +40,13 @@ export const getAllSupplierProcedure = authedProcedure
       ? {
           ...(input.columns.includes("id") ? { id: Supplier.id } : {}),
           ...(input.columns.includes("name") ? { name: Supplier.name } : {}),
+          ...(input.columns.includes("minimum_order_amount")
+            ? { minimum_order_amount: Supplier.minimum_order_amount }
+            : {}),
+          ...(input.columns.includes("free_shipping_minimum")
+            ? { free_shipping_minimum: Supplier.free_shipping_minimum }
+            : {}),
+          ...(input.columns.includes("shipping_fee") ? { shipping_fee: Supplier.shipping_fee } : {}),
           totalCount: sql<number>`COUNT(*) OVER()`.as("total_count"),
         }
       : {

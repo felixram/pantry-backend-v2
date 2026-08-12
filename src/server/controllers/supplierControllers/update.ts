@@ -13,6 +13,7 @@ export const updateSupplierProcedure = authedMutation
       address: z.string().optional(),
       email: z.union([z.email(), z.literal("")]).optional(),
       delivery_days: z.string().optional(),
+      minimum_order_amount: z.coerce.number().optional(),
       free_shipping_minimum: z.coerce.number().optional(),
       shipping_fee: z.coerce.number().optional(),
       supplier_type: z.enum(["PRIMARY", "SECONDARY"]).optional(),
@@ -50,6 +51,8 @@ export const updateSupplierProcedure = authedMutation
     if (input.email !== undefined) updatedData.email = input.email
     if (input.delivery_days !== undefined)
       updatedData.delivery_days = input.delivery_days
+    if (input.minimum_order_amount !== undefined)
+      updatedData.minimum_order_amount = input.minimum_order_amount
     if (input.free_shipping_minimum !== undefined)
       updatedData.free_shipping_minimum = input.free_shipping_minimum
     if (input.shipping_fee !== undefined)

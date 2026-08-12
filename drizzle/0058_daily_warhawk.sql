@@ -1,0 +1,1 @@
+ALTER TABLE "supplier" ADD COLUMN "minimum_order_amount" real;

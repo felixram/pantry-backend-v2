@@ -12,6 +12,7 @@ export const createSupplierProcedure = authedMutation
       email: z.union([z.email(), z.literal("")]).optional(),
       address: z.string().optional(),
       delivery_days: z.string().optional(),
+      minimum_order_amount: z.coerce.number().optional(),
       free_shipping_minimum: z.coerce.number().optional(),
       shipping_fee: z.coerce.number().optional(),
       supplier_type: z.enum(["PRIMARY", "SECONDARY"]).default("PRIMARY"),

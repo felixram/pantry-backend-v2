@@ -1,27 +1,22 @@
 import {
-  createPurchaseOrder,
   deletePurchaseOrder,
   getAllPuchaseOrders,
   updatePurchaseOrder,
   getPurchaseOrderById,
-  getPurchaseOrderAuditLog,
   generateEmailTemplate,
   addPurchaseOrderItem,
   updatePurchaseOrderItem,
   removePurchaseOrderItem,
   checkExistingPO,
   createPurchaseOrderWithItems,
-  addItemsToPurchaseOrder,
   unlockPurchaseOrder,
   lockPurchaseOrder,
 } from "../../controllers/purchase_orderController/index.ts"
 import { t } from "../../trpc.ts"
 
 export const purchaseOrderRouter = t.router({
-  create: createPurchaseOrder,
   getAll: getAllPuchaseOrders,
   getById: getPurchaseOrderById,
-  getAuditLog: getPurchaseOrderAuditLog,
   update: updatePurchaseOrder,
   delete: deletePurchaseOrder,
   generateEmail: generateEmailTemplate,
@@ -30,7 +25,6 @@ export const purchaseOrderRouter = t.router({
   removeItem: removePurchaseOrderItem,
   checkExisting: checkExistingPO,
   createWithItems: createPurchaseOrderWithItems,
-  addItems: addItemsToPurchaseOrder,
   unlock: unlockPurchaseOrder,
   lock: lockPurchaseOrder,
 })

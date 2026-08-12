@@ -203,7 +203,7 @@ export const updatePurchaseOrder = authedMutation
       // 5. Handle items update
       if (input.items && input.items.length > 0) {
         // Reject duplicate product_ids within the input, matching
-        // createPurchaseOrderWithItems/addItemsToPurchaseOrder.
+        // createPurchaseOrderWithItems.
         const productIds = input.items.map((item) => item.product_id);
         if (new Set(productIds).size !== productIds.length) {
           throw new TRPCError({

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { authedMutation } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { Product } from "../../../db/schema/product.ts";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
@@ -49,10 +49,36 @@ export const createSuggestedPOs = authedMutation
       ? ORDER_STATUS.approved
       : ORDER_STATUS.draft;
 
-    const createdOrders = await ctx.db.transaction(async (tx) => {
+    const { results, skippedSupplierIds } = await ctx.db.transaction(async (tx) => {
+      // Idempotency check: which of the requested suppliers already have a
+      // PO from this exact count session? Checked and acted on inside this
+      // same transaction (not a separate read endpoint) so two concurrent
+      // submissions — a double-click, two tabs, a stale-page resubmit —
+      // can't both slip past a check-then-write race and each create a full
+      // duplicate set of orders.
+      const requestedSupplierIds = input.orders.map((o) => o.supplier_id);
+      const existingPOs = await tx.query.PurchaseOrder.findMany({
+        where: and(
+          eq(PurchaseOrder.source_count_session_id, input.session_id),
+          eq(PurchaseOrder.tenant_id, ctx.tenantId!),
+          inArray(PurchaseOrder.supplier_id, requestedSupplierIds),
+          isNull(PurchaseOrder.deletedAt),
+        ),
+        columns: { supplier_id: true },
+      });
+      const alreadyOrderedSupplierIds = new Set(
+        existingPOs.map((po) => po.supplier_id).filter((id): id is string => id !== null),
+      );
+
       const results: Array<{ purchaseOrderId: string; poNumber: string; supplierId: string }> = [];
+      const skippedSupplierIds: string[] = [];
 
       for (const order of input.orders) {
+        if (alreadyOrderedSupplierIds.has(order.supplier_id)) {
+          skippedSupplierIds.push(order.supplier_id);
+          continue;
+        }
+
         // Validate all products exist
         for (const item of order.items) {
           const product = await tx.query.Product.findFirst({
@@ -76,6 +102,7 @@ export const createSuggestedPOs = authedMutation
             destination_location_id: input.location_id,
             status: initialStatus,
             tenant_id: ctx.tenantId!,
+            source_count_session_id: input.session_id,
           })
           .returning();
 
@@ -113,19 +140,28 @@ export const createSuggestedPOs = authedMutation
         });
       }
 
-      // Mark session so suggested POs can't be created again — tenant-scoped,
-      // matching the check getSuggestedPOs.ts already does before reading
-      // this same session (this write path was missing it).
-      await tx
-        .update(InventoryCountSession)
-        .set({ suggested_pos_created_at: new Date() })
-        .where(and(eq(InventoryCountSession.id, input.session_id), eq(InventoryCountSession.tenant_id, ctx.tenantId!)));
+      // Stamped on first touch, kept for display/audit purposes only — no
+      // longer what enforces anything (that's the per-supplier check above).
+      if (results.length > 0) {
+        await tx
+          .update(InventoryCountSession)
+          .set({ suggested_pos_created_at: new Date() })
+          .where(and(eq(InventoryCountSession.id, input.session_id), eq(InventoryCountSession.tenant_id, ctx.tenantId!)));
+      }
 
-      return results;
+      return { results, skippedSupplierIds };
     });
 
+    const messageParts = [`${results.length} purchase order(s) created successfully.`];
+    if (skippedSupplierIds.length > 0) {
+      messageParts.push(
+        `${skippedSupplierIds.length} supplier(s) already had an order from this count and were skipped.`,
+      );
+    }
+
     return {
-      message: `${createdOrders.length} purchase order(s) created successfully.`,
-      orders: createdOrders,
+      message: messageParts.join(" "),
+      orders: results,
+      skippedSupplierIds,
     };
   });

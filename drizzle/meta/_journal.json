@@ -435,6 +435,13 @@
       "when": 1786559662554,
       "tag": "0061_clumsy_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1786641897271,
+      "tag": "0062_stormy_photon",
+      "breakpoints": true
     }
   ]
 }

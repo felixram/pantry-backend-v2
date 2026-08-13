@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { InventoryCountSession, INVENTORY_COUNT_STATUS } from "../../../db/schema/inventoryCountSession.ts";
 import { Stock } from "../../../db/schema/stock.ts";
+import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { priceInUnit, tryGetFactor } from "../../../utils/unitConversion.ts";
 
@@ -40,12 +41,31 @@ export const getSuggestedPOs = authedProcedure
       });
     }
 
-    if (session.suggested_pos_created_at) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Purchase orders have already been created for this count session",
-      });
-    }
+    // Suppliers that already got a PO from this session — excluded below
+    // from the orderable suggestions and reported separately, so a revisit
+    // (partial creation, stale link, etc.) only ever offers what's actually
+    // still outstanding instead of either blocking everything or offering
+    // duplicates.
+    const existingPOs = await ctx.db.query.PurchaseOrder.findMany({
+      where: and(
+        eq(PurchaseOrder.source_count_session_id, input.session_id),
+        eq(PurchaseOrder.tenant_id, ctx.tenantId),
+        isNull(PurchaseOrder.deletedAt),
+      ),
+      columns: { id: true, po_number: true, supplier_id: true },
+      with: {
+        supplier: { columns: { id: true, name: true } },
+      },
+    });
+    const alreadyOrdered = existingPOs
+      .filter((po) => po.supplier_id !== null)
+      .map((po) => ({
+        supplier_id: po.supplier_id!,
+        supplier_name: po.supplier?.name ?? "Unknown supplier",
+        purchaseOrderId: po.id,
+        poNumber: po.po_number,
+      }));
+    const alreadyOrderedSupplierIds = new Set(alreadyOrdered.map((a) => a.supplier_id));
 
     // Query low-stock items with par levels at this location
     const lowStockItems = await ctx.db.query.Stock.findMany({
@@ -114,6 +134,10 @@ export const getSuggestedPOs = authedProcedure
 
       if (!stock.product.supplier_id || !stock.product.supplier) {
         skipped.push({ product_name: stock.product.name, reason: "no_supplier" });
+        continue;
+      }
+
+      if (alreadyOrderedSupplierIds.has(stock.product.supplier_id)) {
         continue;
       }
 
@@ -206,6 +230,7 @@ export const getSuggestedPOs = authedProcedure
     return {
       suggestedPOs: Array.from(supplierMap.values()),
       skipped,
+      alreadyOrdered,
       location_id: input.location_id,
     };
   });

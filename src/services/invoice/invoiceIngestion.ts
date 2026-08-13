@@ -142,34 +142,52 @@ export async function ingestInvoiceAttachments(params: {
 
     if (!invoice) continue
 
-    // Fetch attachment content from Resend API
-    const buffer = await fetchAttachmentContent(emailId, attachment.id)
-
-    if (buffer) {
-      const fileKey = await uploadInvoiceFile(
-        tenantId,
-        invoice.id,
-        buffer,
-        attachment.content_type,
-        attachment.filename
-      )
-
-      if (fileKey) {
-        await db
-          .update(Invoice)
-          .set({ original_file_url: fileKey })
-          .where(eq(Invoice.id, invoice.id))
-      }
-    } else {
-      logger.warn({ invoiceId: invoice.id, attachmentId: attachment.id }, "Could not fetch attachment content")
-    }
-
     invoiceIds.push(invoice.id)
 
-    // Trigger async processing (fire-and-forget)
-    processInvoice(invoice.id, tenantId).catch((err) => {
-      logger.error({ error: err, invoiceId: invoice.id }, "Background invoice processing failed")
-    })
+    // uploadInvoiceFile can throw (e.g. an R2 network/credential error) —
+    // wrapped so one bad attachment can't abort the rest of the batch and
+    // can't leave this invoice stuck at PENDING with no explanation and no
+    // way to retry (retryInvoice only surfaces FAILED invoices).
+    try {
+      // Fetch attachment content from Resend API
+      const buffer = await fetchAttachmentContent(emailId, attachment.id)
+
+      if (buffer) {
+        const fileKey = await uploadInvoiceFile(
+          tenantId,
+          invoice.id,
+          buffer,
+          attachment.content_type,
+          attachment.filename
+        )
+
+        if (fileKey) {
+          await db
+            .update(Invoice)
+            .set({ original_file_url: fileKey })
+            .where(and(eq(Invoice.id, invoice.id), eq(Invoice.tenant_id, tenantId)))
+        }
+      } else {
+        logger.warn({ invoiceId: invoice.id, attachmentId: attachment.id }, "Could not fetch attachment content")
+      }
+
+      // Trigger async processing (fire-and-forget). If original_file_url
+      // never got set (buffer/upload failed above), processInvoice's own
+      // download step fails fast and marks the invoice FAILED — still a
+      // clean, retryable terminal state.
+      processInvoice(invoice.id, tenantId).catch((err) => {
+        logger.error({ error: err, invoiceId: invoice.id }, "Background invoice processing failed")
+      })
+    } catch (err) {
+      logger.error({ error: err, invoiceId: invoice.id, attachmentId: attachment.id }, "Failed to prepare invoice attachment for processing")
+      await db
+        .update(Invoice)
+        .set({
+          status: INVOICE_STATUS.failed,
+          processing_error: err instanceof Error ? err.message : String(err),
+        })
+        .where(and(eq(Invoice.id, invoice.id), eq(Invoice.tenant_id, tenantId)))
+    }
   }
 
   return invoiceIds

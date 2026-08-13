@@ -88,7 +88,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
         total: extracted.total ?? null,
         status: INVOICE_STATUS.extracted,
       })
-      .where(eq(Invoice.id, invoiceId))
+      .where(and(eq(Invoice.id, invoiceId), eq(Invoice.tenant_id, tenantId)))
 
     // 4. Match supplier
     const supplierMatch = await matchSupplier(db, invoice.tenant_id, extracted, invoice.from_email)
@@ -96,7 +96,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
     await db
       .update(Invoice)
       .set({ matched_supplier_id: supplierMatch.supplierId })
-      .where(eq(Invoice.id, invoiceId))
+      .where(and(eq(Invoice.id, invoiceId), eq(Invoice.tenant_id, tenantId)))
 
     // 5. Match products
     const productMatches = await matchAllProducts(
@@ -118,7 +118,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
     await db
       .update(Invoice)
       .set({ matched_purchase_order_id: poMatch.purchaseOrderId })
-      .where(eq(Invoice.id, invoiceId))
+      .where(and(eq(Invoice.id, invoiceId), eq(Invoice.tenant_id, tenantId)))
 
     // 7. Create invoice items with matching and discrepancy info
     const linesForMatching: InvoiceLineForMatching[] = extracted.items.map((item, index) => ({
@@ -174,7 +174,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
     await db
       .update(Invoice)
       .set({ status: finalStatus })
-      .where(eq(Invoice.id, invoiceId))
+      .where(and(eq(Invoice.id, invoiceId), eq(Invoice.tenant_id, tenantId)))
 
     // 9. Send notification
     try {
@@ -222,12 +222,17 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
   } catch (error) {
     logger.error({ error, invoiceId }, "Invoice processing failed")
 
+    // Tenant-scoped even though every current caller pre-verifies ownership
+    // before invoking this function — this is the one write in the file that
+    // runs even when that upstream check has already failed (e.g. invoiceId
+    // belongs to a different tenant), so without the filter here a future
+    // caller that skips the pre-check would corrupt another tenant's invoice.
     await db
       .update(Invoice)
       .set({
         status: INVOICE_STATUS.failed,
         processing_error: error instanceof Error ? error.message : String(error),
       })
-      .where(eq(Invoice.id, invoiceId))
+      .where(and(eq(Invoice.id, invoiceId), eq(Invoice.tenant_id, tenantId)))
   }
 }

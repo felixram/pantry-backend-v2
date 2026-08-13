@@ -335,28 +335,30 @@ export async function sendInvoiceReceivedNotification(params: {
     reviewUrl,
   }
 
-  for (const user of elevatedUsers) {
-    if (!resend) {
-      console.log({
-        type: "email_invoice_received_dev",
-        to: user.email,
-        supplierName,
-        invoiceTotal,
-        message: "Email would be sent (no RESEND_API_KEY configured)",
-      })
-      continue
-    }
+  await Promise.all(
+    elevatedUsers.map(async (user) => {
+      if (!resend) {
+        console.log({
+          type: "email_invoice_received_dev",
+          to: user.email,
+          supplierName,
+          invoiceTotal,
+          message: "Email would be sent (no RESEND_API_KEY configured)",
+        })
+        return
+      }
 
-    try {
-      await resend.emails.send({
-        from: `Vantory <${fromEmail}>`,
-        to: [user.email],
-        subject: `New invoice received from ${supplierName}`,
-        html: getInvoiceReceivedEmailHtml(templateParams),
-        text: getInvoiceReceivedEmailText(templateParams),
-      })
-    } catch (err) {
-      console.error({ type: "email_invoice_received_error", error: err, to: user.email })
-    }
-  }
+      try {
+        await resend.emails.send({
+          from: `Vantory <${fromEmail}>`,
+          to: [user.email],
+          subject: `New invoice received from ${supplierName}`,
+          html: getInvoiceReceivedEmailHtml(templateParams),
+          text: getInvoiceReceivedEmailText(templateParams),
+        })
+      } catch (err) {
+        console.error({ type: "email_invoice_received_error", error: err, to: user.email })
+      }
+    })
+  )
 }

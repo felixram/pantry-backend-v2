@@ -1,16 +1,13 @@
-import {
-  GoogleGenerativeAI,
-  type GenerationConfig,
-} from "@google/generative-ai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { logger } from "../../utils/logger.ts";
 import {
   inferDiscountPercent,
   isLineTotalConsistent,
 } from "../../utils/discountMath.ts";
 
-let genAI: GoogleGenerativeAI | null = null;
+let genAI: GoogleGenAI | null = null;
 
-function getGenAI(): GoogleGenerativeAI | null {
+function getGenAI(): GoogleGenAI | null {
   if (genAI) return genAI;
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -21,7 +18,7 @@ function getGenAI(): GoogleGenerativeAI | null {
     return null;
   }
 
-  genAI = new GoogleGenerativeAI(apiKey);
+  genAI = new GoogleGenAI({ apiKey });
   return genAI;
 }
 
@@ -76,46 +73,46 @@ If a per-item tax_amount is listed, extract it.
 Be precise with numbers. Omit fields not present. Estimate confidence (0-1).`;
 
 const responseSchema = {
-  type: "object" as const,
+  type: Type.OBJECT,
   properties: {
     supplier: {
-      type: "object" as const,
+      type: Type.OBJECT,
       properties: {
-        name: { type: "string" as const },
-        email: { type: "string" as const },
-        phone: { type: "string" as const },
-        address: { type: "string" as const },
+        name: { type: Type.STRING },
+        email: { type: Type.STRING },
+        phone: { type: Type.STRING },
+        address: { type: Type.STRING },
       },
       required: ["name"],
     },
-    invoice_number: { type: "string" as const },
-    invoice_date: { type: "string" as const },
-    due_date: { type: "string" as const },
-    po_reference: { type: "string" as const },
+    invoice_number: { type: Type.STRING },
+    invoice_date: { type: Type.STRING },
+    due_date: { type: Type.STRING },
+    po_reference: { type: Type.STRING },
     items: {
-      type: "array" as const,
+      type: Type.ARRAY,
       items: {
-        type: "object" as const,
+        type: Type.OBJECT,
         properties: {
-          description: { type: "string" as const },
-          sku: { type: "string" as const },
-          quantity: { type: "number" as const },
-          unit: { type: "string" as const },
-          unit_price: { type: "number" as const },
-          discount_percent: { type: "number" as const },
-          line_total: { type: "number" as const },
-          out_of_stock: { type: "boolean" as const },
-          taxable: { type: "boolean" as const },
-          tax_amount: { type: "number" as const },
+          description: { type: Type.STRING },
+          sku: { type: Type.STRING },
+          quantity: { type: Type.NUMBER },
+          unit: { type: Type.STRING },
+          unit_price: { type: Type.NUMBER },
+          discount_percent: { type: Type.NUMBER },
+          line_total: { type: Type.NUMBER },
+          out_of_stock: { type: Type.BOOLEAN },
+          taxable: { type: Type.BOOLEAN },
+          tax_amount: { type: Type.NUMBER },
         },
         required: ["description", "quantity", "unit_price", "line_total", "taxable"],
       },
     },
-    subtotal: { type: "number" as const },
-    tax: { type: "number" as const },
-    total: { type: "number" as const },
-    currency: { type: "string" as const },
-    confidence: { type: "number" as const },
+    subtotal: { type: Type.NUMBER },
+    tax: { type: Type.NUMBER },
+    total: { type: Type.NUMBER },
+    currency: { type: Type.STRING },
+    confidence: { type: Type.NUMBER },
   },
   required: ["supplier", "items", "total", "confidence"],
 };
@@ -135,14 +132,6 @@ export async function extractInvoiceData(
     throw new Error("Gemini AI not configured — set GEMINI_API_KEY");
   }
 
-  const model = ai.getGenerativeModel({
-    model: "gemini-3.1-flash-lite",
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema,
-    } as GenerationConfig,
-  });
-
   const fileData = {
     inlineData: {
       data: fileBuffer.toString("base64"),
@@ -157,8 +146,18 @@ export async function extractInvoiceData(
       const fullPrompt = supplierContext
         ? `${supplierContext}\n\n${EXTRACTION_PROMPT}`
         : EXTRACTION_PROMPT;
-      const result = await model.generateContent([fullPrompt, fileData]);
-      const text = result.response.text();
+      const result = await ai.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents: [fullPrompt, fileData],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema,
+        },
+      });
+      const text = result.text;
+      if (!text) {
+        throw new Error("Gemini returned an empty response");
+      }
       const parsed: InvoiceExtractionResult = JSON.parse(text);
 
       // Post-processing: infer discounts when qty × unit_price ≠ line_total
@@ -241,8 +240,10 @@ export async function extractInvoiceData(
         lastError.message.includes("503") ||
         lastError.message.includes("RESOURCE_EXHAUSTED");
 
-      if (!isRetryable && attempt === 0) {
-        // Non-retryable error on first attempt, throw immediately
+      if (!isRetryable) {
+        // Non-retryable error — throw immediately regardless of which
+        // attempt this is, rather than sleeping through the remaining
+        // backoff for an error retrying can never fix.
         throw lastError;
       }
 

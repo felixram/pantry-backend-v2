@@ -1,4 +1,4 @@
-import { boolean, index, integer, pgTable, real, text, uuid } from "drizzle-orm/pg-core"
+import { boolean, index, integer, pgTable, real, text, timestamp, uuid } from "drizzle-orm/pg-core"
 import { createdAt, deletedAt, id, updatedAt } from "../schemaHelpers.ts"
 import { relations } from "drizzle-orm"
 import { Stock } from "./stock.ts"
@@ -28,6 +28,12 @@ export const Location = pgTable(
     count_reminder_time: text("count_reminder_time"),    // "HH:MM" in count_reminder_tz
     count_reminder_tz: text("count_reminder_tz"),        // IANA tz, e.g. "America/New_York"
     count_designated_user_id: uuid("count_designated_user_id").references(() => User.id),
+    // System-written only, by the reminder cron itself — never exposed via
+    // location.update. Idempotency guard (skip a location whose reminder
+    // already went out this ISO week) plus the "last sent" timestamp shown
+    // in the config UI.
+    last_reminder_sent_week_identifier: text("last_reminder_sent_week_identifier"),
+    last_reminder_sent_at: timestamp("last_reminder_sent_at", { withTimezone: true }),
     tenant_id: uuid("tenant_id")
       .notNull()
       .references(() => Tenant.id),

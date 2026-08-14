@@ -16,15 +16,12 @@ import { logger } from "./utils/logger.ts"
 import { User } from "./db/schema/users.ts"
 import { Tenant } from "./db/schema/tenant.ts"
 import { Location } from "./db/schema/location.ts"
-import { STATUS } from "./types/user.ts"
-import { createMagicLinkToken } from "./utils/tokenUtils.ts"
-import { getISOWeekIdentifier } from "./utils/dateUtils.ts"
-import { sendInventoryCountReminder } from "./services/email/emailService.ts"
 import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
 import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
 import { purgeExpiredDeletedProducts } from "./server/controllers/productControllers/helpers/purgeExpiredProducts.ts"
 import { purgeExpiredDeletedSuppliers } from "./server/controllers/supplierControllers/helpers/purgeExpiredSuppliers.ts"
 import { purgeExpiredDeletedCategories } from "./server/controllers/categoryControllers/helpers/purgeExpiredCategories.ts"
+import { sendInventoryCountReminders } from "./server/controllers/inventoryCountControllers/helpers/sendInventoryCountReminders.ts"
 
 dotenv.config()
 
@@ -100,6 +97,9 @@ app.get("/ready", async (_req, res) => {
 // Cron endpoint: called by Railway cron every hour
 // Schedule: 0 * * * *
 // Command: curl -X POST https://your-api.railway.app/api/cron/inventory-reminder -H "Authorization: Bearer $CRON_SECRET"
+// Logic lives in sendInventoryCountReminders.ts — idempotent per (location,
+// ISO week) and falls back to the location's manager if the designated
+// counter has gone inactive, see that file for details.
 app.post("/api/cron/inventory-reminder", async (req, res) => {
   const authHeader = req.headers.authorization
   if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -107,100 +107,8 @@ app.post("/api/cron/inventory-reminder", async (req, res) => {
   }
 
   try {
-    const now = new Date()
-    const weekIdentifier = getISOWeekIdentifier(now)
-    const clientUrl = process.env.CLIENT_URL ?? "http://localhost:5173"
-
-    // Fetch all locations with reminder enabled and a designated counter (across non-demo tenants)
-    const enabledLocations = await db
-      .select({
-        id: Location.id,
-        count_reminder_day: Location.count_reminder_day,
-        count_reminder_time: Location.count_reminder_time,
-        count_reminder_tz: Location.count_reminder_tz,
-        count_designated_user_id: Location.count_designated_user_id,
-      })
-      .from(Location)
-      .innerJoin(Tenant, and(eq(Location.tenant_id, Tenant.id), eq(Tenant.is_demo, false), isNull(Tenant.deletedAt)))
-      .where(
-        and(
-          eq(Location.count_reminder_enabled, true),
-          isNull(Location.deletedAt),
-        ),
-      )
-
-    // Determine which locations should fire now (match current hour in their TZ)
-    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-    const designatedUserIds: string[] = []
-
-    for (const loc of enabledLocations) {
-      if (loc.count_reminder_day === null || !loc.count_reminder_time || !loc.count_designated_user_id) continue
-
-      const tz = loc.count_reminder_tz ?? "UTC"
-      try {
-        const parts = Object.fromEntries(
-          new Intl.DateTimeFormat("en-US", {
-            timeZone: tz,
-            weekday: "short",
-            hour: "2-digit",
-            hour12: false,
-          }).formatToParts(now).map(({ type, value }) => [type, value])
-        )
-        const localDay = dayNames.indexOf(parts.weekday ?? "")
-        const localHour = parseInt(parts.hour ?? "-1", 10)
-        const [scheduledHour] = loc.count_reminder_time.split(":").map(Number)
-
-        if (localDay === loc.count_reminder_day && localHour === scheduledHour) {
-          designatedUserIds.push(loc.count_designated_user_id)
-        }
-      } catch {
-        logger.warn({ locationId: loc.id, tz }, "Invalid timezone on location, skipping")
-      }
-    }
-
-    if (designatedUserIds.length === 0) {
-      logger.info({ weekIdentifier }, "Inventory reminder cron: no locations scheduled for this hour")
-      return res.json({ success: true, weekIdentifier, emailsSent: 0, emailsFailed: 0 })
-    }
-
-    // Fetch the designated users for matched locations
-    const usersToNotify = await db
-      .select({
-        id: User.id,
-        name: User.name,
-        email: User.email,
-        role: User.role,
-        tenantName: Tenant.name,
-      })
-      .from(User)
-      .innerJoin(Tenant, eq(User.tenant_id, Tenant.id))
-      .where(
-        and(
-          eq(User.status, STATUS.active),
-          isNull(User.deletedAt),
-          sql`${User.id} = ANY(ARRAY[${sql.join(designatedUserIds.map(id => sql`${id}::uuid`), sql`, `)}])`,
-        ),
-      )
-
-    const results = await Promise.allSettled(
-      usersToNotify.map(async (user) => {
-        const token = createMagicLinkToken({ id: user.id, role: user.role, purpose: "count_magic_link" })
-        const magicLink = `${clientUrl}/inventory/count?token=${token}`
-        return sendInventoryCountReminder({
-          to: user.email,
-          userName: user.name,
-          magicLink,
-          orgName: user.tenantName,
-          weekIdentifier,
-        })
-      }),
-    )
-
-    const emailsSent = results.filter((r) => r.status === "fulfilled").length
-    const emailsFailed = results.filter((r) => r.status === "rejected").length
-
-    logger.info({ weekIdentifier, emailsSent, emailsFailed, locationsMatched: designatedUserIds.length }, "Inventory reminder cron completed")
-    return res.json({ success: true, weekIdentifier, emailsSent, emailsFailed })
+    const result = await sendInventoryCountReminders(db)
+    return res.json({ success: true, ...result })
   } catch (error) {
     logger.error({ error }, "Cron inventory-reminder failed")
     return res.status(500).json({ error: "Internal server error" })

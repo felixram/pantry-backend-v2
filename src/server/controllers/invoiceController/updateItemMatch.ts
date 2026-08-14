@@ -6,14 +6,15 @@ import { INVOICE_STATUS } from "../../../types/invoice.ts"
 import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
+import { recalculateInvoiceDiscrepancies } from "../../../services/invoice/poMatcher.ts"
 
 export const updateItemMatchProcedure = adminMutation
   .input(
     z.object({
       invoiceItemId: z.string().uuid(),
       productId: z.string().uuid(),
-      qty: z.number().optional(),
-      unitPrice: z.number().optional(),
+      qty: z.number().nonnegative().optional(),
+      unitPrice: z.number().nonnegative().optional(),
     })
   )
   .mutation(async ({ ctx, input }) => {
@@ -66,6 +67,11 @@ export const updateItemMatchProcedure = adminMutation
       .update(InvoiceItem)
       .set(updateData)
       .where(eq(InvoiceItem.id, input.invoiceItemId))
+
+    // Product/qty/price all feed the discrepancy calc — recompute for the
+    // whole invoice since qty discrepancy is an aggregate across every line
+    // sharing this item's matched PO item, not just this one.
+    await recalculateInvoiceDiscrepancies(ctx.db, item.invoice.id, ctx.tenantId)
 
     // Upsert product alias if we have a supplier and extracted name
     if (

@@ -117,12 +117,15 @@ export const confirmInvoiceProcedure = adminMutation
           .where(eq(Invoice.id, input.invoiceId))
       }
 
-      // 3. Build confirmed items
-      const confirmedItems = invoice.items.map((item) => ({
-        productId: (item.confirmed_product_id || item.matched_product_id)!,
-        qty: item.confirmed_qty ?? item.extracted_qty ?? 0,
-        unitPrice: item.confirmed_unit_price ?? item.extracted_unit_price ?? 0,
-      }))
+      // 3. Build confirmed items — OOS lines are excluded here too, matching
+      // the PO-received branch below (they were never actually received).
+      const confirmedItems = invoice.items
+        .filter((item) => !item.is_out_of_stock)
+        .map((item) => ({
+          productId: (item.confirmed_product_id || item.matched_product_id)!,
+          qty: item.confirmed_qty ?? item.extracted_qty ?? 0,
+          unitPrice: item.confirmed_unit_price ?? item.extracted_unit_price ?? 0,
+        }))
 
       // Set status to CONFIRMED + apply tax overrides if provided
       const confirmUpdate: Record<string, any> = {

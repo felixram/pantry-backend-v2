@@ -1,6 +1,8 @@
 import { eq, and, isNull } from "drizzle-orm"
 import { PurchaseOrder } from "../../db/schema/purchaseOrder.ts"
 import { PurchaseOrderItem } from "../../db/schema/purchaseOrderItem.ts"
+import { Invoice } from "../../db/schema/invoice.ts"
+import { InvoiceItem } from "../../db/schema/invoiceItem.ts"
 import { ORDER_STATUS } from "../../types/orders.ts"
 import type { db as dbType } from "../../db/index.ts"
 import type { InvoiceExtractionResult } from "../ai/geminiService.ts"
@@ -221,4 +223,81 @@ export function calculateItemDiscrepancies(
       priceDiscrepancyAmount: priceDiff,
     }
   })
+}
+
+/**
+ * Recompute and persist qty/price discrepancy fields for every item on an
+ * invoice, against its currently matched PO (aggregate qty discrepancy
+ * depends on every line sharing a matched_po_item_id, not just the one that
+ * changed). Call this after any mutation that changes a field the
+ * calculation depends on — confirmed qty/price, confirmed product, or the
+ * OOS flag — none of which recomputed discrepancies on their own before,
+ * leaving sibling lines' discrepancy badges stale after an edit.
+ */
+export async function recalculateInvoiceDiscrepancies(
+  db: typeof dbType,
+  invoiceId: string,
+  tenantId: string
+): Promise<void> {
+  const invoice = await db.query.Invoice.findFirst({
+    where: and(eq(Invoice.id, invoiceId), eq(Invoice.tenant_id, tenantId)),
+    with: { items: true },
+  })
+  if (!invoice) return
+
+  if (!invoice.matched_purchase_order_id) {
+    // No PO to compare against — clear any stale discrepancy data rather
+    // than leaving it pointing at a match that no longer applies.
+    for (const item of invoice.items) {
+      if (!item.has_qty_discrepancy && !item.has_price_discrepancy && item.matched_po_item_id === null) continue
+      await db
+        .update(InvoiceItem)
+        .set({
+          matched_po_item_id: null,
+          has_qty_discrepancy: false,
+          has_price_discrepancy: false,
+          qty_discrepancy_amount: null,
+          price_discrepancy_amount: null,
+        })
+        .where(eq(InvoiceItem.id, item.id))
+    }
+    return
+  }
+
+  const po = await db.query.PurchaseOrder.findFirst({
+    where: and(eq(PurchaseOrder.id, invoice.matched_purchase_order_id), eq(PurchaseOrder.tenant_id, tenantId)),
+    with: { purchaseOrderItems: true },
+  })
+  if (!po) return
+
+  const poItems = po.purchaseOrderItems.map((item) => ({
+    poItemId: item.id,
+    productId: item.product_id,
+    qty: item.qty,
+    unitPrice: item.unit_price,
+  }))
+
+  const linesForMatching: InvoiceLineForMatching[] = invoice.items.map((item) => ({
+    productId: item.confirmed_product_id || item.matched_product_id,
+    qty: item.confirmed_qty ?? item.extracted_qty ?? 0,
+    unitPrice: item.confirmed_unit_price ?? item.extracted_unit_price ?? 0,
+    discountPercent: item.extracted_discount_percent ?? 0,
+    isOOS: item.is_out_of_stock ?? false,
+  }))
+
+  const discrepancies = calculateItemDiscrepancies(linesForMatching, poItems)
+
+  for (let i = 0; i < invoice.items.length; i++) {
+    const d = discrepancies[i]!
+    await db
+      .update(InvoiceItem)
+      .set({
+        matched_po_item_id: d.matchedPoItemId,
+        has_qty_discrepancy: d.hasQtyDiscrepancy,
+        has_price_discrepancy: d.hasPriceDiscrepancy,
+        qty_discrepancy_amount: d.qtyDiscrepancyAmount,
+        price_discrepancy_amount: d.priceDiscrepancyAmount,
+      })
+      .where(eq(InvoiceItem.id, invoice.items[i]!.id))
+  }
 }

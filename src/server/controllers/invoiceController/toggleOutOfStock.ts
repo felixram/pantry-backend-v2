@@ -5,6 +5,7 @@ import { INVOICE_STATUS } from "../../../types/invoice.ts"
 import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
+import { recalculateInvoiceDiscrepancies } from "../../../services/invoice/poMatcher.ts"
 
 export const toggleOutOfStockProcedure = adminMutation
   .input(
@@ -50,6 +51,10 @@ export const toggleOutOfStockProcedure = adminMutation
       .update(InvoiceItem)
       .set({ is_out_of_stock: newValue })
       .where(eq(InvoiceItem.id, input.invoiceItemId))
+
+    // The OOS flag feeds into the aggregate qty-discrepancy calc for every
+    // line sharing this item's matched PO item, not just this one.
+    await recalculateInvoiceDiscrepancies(ctx.db, item.invoice.id, ctx.tenantId)
 
     return { is_out_of_stock: newValue }
   })

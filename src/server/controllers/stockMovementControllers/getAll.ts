@@ -3,7 +3,7 @@ import { adminProcedure } from "../../trpc.ts";
 import { StockMovement } from "../../../db/schema/stockMovement.ts";
 import { eq, and, gte, lte, desc, sql, getTableColumns, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { ROLES } from "../../../types/user.ts";
+import { getLocationFilter } from "../../../utils/locationFilter.ts";
 
 export const getAllStockMovements = adminProcedure
   .input(
@@ -24,11 +24,9 @@ export const getAllStockMovements = adminProcedure
       });
     }
 
-    // MANAGER can only see movements for their location
-    const effectiveLocationId =
-      ctx.user!.role === ROLES.manager
-        ? ctx.userLocationId
-        : input.location_id;
+    // ADMIN can filter by any location or see all; MANAGER is hard-scoped
+    // to their own (and rejected if they explicitly request a different one).
+    const effectiveLocationId = getLocationFilter(ctx.user!, ctx.userLocationId, input.location_id);
 
     // Build where conditions - always filter by tenant
     const conditions = [eq(StockMovement.tenant_id, ctx.tenantId)];

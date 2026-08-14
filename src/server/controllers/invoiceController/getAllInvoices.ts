@@ -4,6 +4,7 @@ import { Location } from "../../../db/schema/location.ts"
 import { authedProcedure } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
+import { getLocationFilter } from "../../../utils/locationFilter.ts"
 
 export const getAllInvoicesProcedure = authedProcedure
   .input(
@@ -32,8 +33,12 @@ export const getAllInvoicesProcedure = authedProcedure
       conditions.push(eq(Invoice.status, input.status))
     }
 
-    if (input.locationId) {
-      conditions.push(eq(Invoice.location_id, input.locationId))
+    // ADMIN can filter by any location or see all; MANAGER/USER are
+    // hard-scoped to their own (and rejected if they explicitly request a
+    // different one) — this was previously an unchecked pass-through.
+    const locationFilter = getLocationFilter(ctx.user!, ctx.userLocationId, input.locationId)
+    if (locationFilter) {
+      conditions.push(eq(Invoice.location_id, locationFilter))
     }
 
     if (input.search) {

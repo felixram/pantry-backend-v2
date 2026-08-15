@@ -9,6 +9,7 @@ import { downloadFile } from "../storage/r2Client.ts"
 import { extractInvoiceData } from "../ai/geminiService.ts"
 import { matchSupplier } from "./supplierMatcher.ts"
 import { matchAllProducts } from "./productMatcher.ts"
+import { matchAllTaxRates } from "./taxRateMatcher.ts"
 import { matchPurchaseOrder, calculateItemDiscrepancies } from "./poMatcher.ts"
 import type { InvoiceLineForMatching } from "./poMatcher.ts"
 import { sendInvoiceReceivedNotification, sendInvoiceAcknowledgmentEmail } from "../email/emailService.ts"
@@ -131,9 +132,22 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
 
     const discrepancies = calculateItemDiscrepancies(linesForMatching, poMatch.poItems)
 
+    // Match each taxable line's implied rate (Gemini only extracts a dollar
+    // amount) against the tenant's configured purchase/both TaxRate rows.
+    const taxRateMatches = await matchAllTaxRates(
+      db,
+      invoice.tenant_id,
+      extracted.items.map((item) => ({
+        taxable: item.taxable ?? true,
+        taxAmount: item.tax_amount ?? null,
+        lineTotal: item.line_total,
+      }))
+    )
+
     const invoiceItems = extracted.items.map((item, index) => {
       const productMatch = productMatches[index]!
       const d = discrepancies[index]!
+      const taxRateMatch = taxRateMatches[index]!
 
       return {
         invoice_id: invoiceId,
@@ -155,6 +169,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
         has_price_discrepancy: d.hasPriceDiscrepancy,
         qty_discrepancy_amount: d.qtyDiscrepancyAmount,
         price_discrepancy_amount: d.priceDiscrepancyAmount,
+        matched_tax_rate_id: taxRateMatch.taxRateId,
       }
     })
 

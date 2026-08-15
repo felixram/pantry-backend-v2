@@ -1,0 +1,4 @@
+ALTER TABLE "invoice_item" ADD COLUMN "matched_tax_rate_id" uuid;--> statement-breakpoint
+ALTER TABLE "invoice_item" ADD COLUMN "confirmed_tax_rate_id" uuid;--> statement-breakpoint
+ALTER TABLE "invoice_item" ADD CONSTRAINT "invoice_item_matched_tax_rate_id_tax_rate_id_fk" FOREIGN KEY ("matched_tax_rate_id") REFERENCES "public"."tax_rate"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "invoice_item" ADD CONSTRAINT "invoice_item_confirmed_tax_rate_id_tax_rate_id_fk" FOREIGN KEY ("confirmed_tax_rate_id") REFERENCES "public"."tax_rate"("id") ON DELETE no action ON UPDATE no action;

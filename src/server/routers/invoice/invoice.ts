@@ -11,6 +11,7 @@ import {
   updateInvoiceConfigProcedure,
   toggleOutOfStockProcedure,
   toggleItemTaxableProcedure,
+  matchItemTaxRateProcedure,
   getSupplierAccuracyProcedure,
   updateInvoiceMatchProcedure,
 } from "../../controllers/invoiceController/index.ts"
@@ -30,6 +31,7 @@ export const invoiceRouter = t.router({
   updateConfig: updateInvoiceConfigProcedure,
   toggleOutOfStock: toggleOutOfStockProcedure,
   toggleItemTaxable: toggleItemTaxableProcedure,
+  matchItemTaxRate: matchItemTaxRateProcedure,
   getSupplierAccuracy: getSupplierAccuracyProcedure,
   updateMatch: updateInvoiceMatchProcedure,
 })

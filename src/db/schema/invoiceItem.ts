@@ -4,6 +4,7 @@ import { relations } from "drizzle-orm"
 import { Invoice } from "./invoice.ts"
 import { Product } from "./product.ts"
 import { PurchaseOrderItem } from "./purchaseOrderItem.ts"
+import { TaxRate } from "./taxRate.ts"
 
 export const InvoiceItem = pgTable(
   "invoice_item",
@@ -39,6 +40,13 @@ export const InvoiceItem = pgTable(
     is_taxable: boolean("is_taxable").notNull().default(true),
     extracted_tax_amount: real("extracted_tax_amount"),
     confirmed_tax_amount: real("confirmed_tax_amount"),
+    // Tax rate matching — mirrors matched_product_id/confirmed_product_id.
+    // Gemini only extracts a dollar tax_amount, never a rate; matched_tax_rate_id
+    // is the closest configured TaxRate found by effective-rate matching at
+    // import time (see taxRateMatcher.ts), confirmed_tax_rate_id is the
+    // reviewer's pick/override (including a rate created on the spot).
+    matched_tax_rate_id: uuid("matched_tax_rate_id").references(() => TaxRate.id),
+    confirmed_tax_rate_id: uuid("confirmed_tax_rate_id").references(() => TaxRate.id),
     // Accuracy tracking (set on confirmation)
     product_match_correct: boolean("product_match_correct"),
     price_extraction_correct: boolean("price_extraction_correct"),
@@ -71,5 +79,15 @@ export const InvoiceItemRelations = relations(InvoiceItem, ({ one }) => ({
   matchedPoItem: one(PurchaseOrderItem, {
     fields: [InvoiceItem.matched_po_item_id],
     references: [PurchaseOrderItem.id],
+  }),
+  matchedTaxRate: one(TaxRate, {
+    fields: [InvoiceItem.matched_tax_rate_id],
+    references: [TaxRate.id],
+    relationName: "matchedTaxRate",
+  }),
+  confirmedTaxRate: one(TaxRate, {
+    fields: [InvoiceItem.confirmed_tax_rate_id],
+    references: [TaxRate.id],
+    relationName: "confirmedTaxRate",
   }),
 }))

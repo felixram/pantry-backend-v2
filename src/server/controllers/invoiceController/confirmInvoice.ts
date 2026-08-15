@@ -245,6 +245,7 @@ export const confirmInvoiceProcedure = adminMutation
           confirmedPrice = applyDiscount(confirmedPrice, item.extracted_discount_percent)
         }
         const isTaxable = item.is_taxable
+        const resolvedTaxRateId = item.confirmed_tax_rate_id ?? item.matched_tax_rate_id
 
         // Fetch the product with its active version
         const product = await tx.query.Product.findFirst({
@@ -255,13 +256,21 @@ export const confirmInvoiceProcedure = adminMutation
 
         let updated = false
 
-        // Update tax exempt status based on invoice item taxable flag
+        // Update tax exempt status based on invoice item taxable flag, and
+        // the actual tax rate if the reviewer matched/created one — without
+        // this second half the exempt flag alone can't reproduce the real
+        // rate on the product's next PO (resolveApplicableTaxRate needs
+        // tax_rate_id, not just a boolean).
         const shouldBeExempt = !isTaxable
+        const productTaxUpdate: { is_tax_exempt?: boolean; tax_rate_id?: string } = {}
         if (product.is_tax_exempt !== shouldBeExempt) {
-          await tx
-            .update(Product)
-            .set({ is_tax_exempt: shouldBeExempt })
-            .where(eq(Product.id, productId))
+          productTaxUpdate.is_tax_exempt = shouldBeExempt
+        }
+        if (resolvedTaxRateId && product.tax_rate_id !== resolvedTaxRateId) {
+          productTaxUpdate.tax_rate_id = resolvedTaxRateId
+        }
+        if (Object.keys(productTaxUpdate).length > 0) {
+          await tx.update(Product).set(productTaxUpdate).where(eq(Product.id, productId))
           updated = true
         }
 

@@ -25,6 +25,8 @@ export const getInvoiceByIdProcedure = authedProcedure
           with: {
             matchedProduct: true,
             confirmedProduct: true,
+            matchedTaxRate: { columns: { id: true, name: true, rate: true } },
+            confirmedTaxRate: { columns: { id: true, name: true, rate: true } },
             matchedPoItem: {
               with: {
                 product: true,

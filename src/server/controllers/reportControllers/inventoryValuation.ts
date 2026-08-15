@@ -54,10 +54,17 @@ export const inventoryValuation = adminProcedure
       },
     });
 
+    // Exclude stocks whose location or product has been soft-deleted —
+    // neither relation carries a deletedAt filter in the `with` clause
+    // above (unlike lowStockReport, which already excludes deleted
+    // locations), so an archived location/product would otherwise still
+    // inflate the total and appear in the by_location/by_product breakdown.
+    const activeStocks = allStocks.filter((stock) => !stock.location?.deletedAt && !stock.product?.deletedAt);
+
     // Filter by category if provided
     const stocks = input.category_id
-      ? allStocks.filter((stock) => stock.product?.category?.id === input.category_id)
-      : allStocks;
+      ? activeStocks.filter((stock) => stock.product?.category?.id === input.category_id)
+      : activeStocks;
 
     // Calculate aggregates in application (necessary because of cost price calculation)
     let totalValue = 0;

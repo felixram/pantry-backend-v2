@@ -47,9 +47,10 @@ export const supplierPerformance = authedProcedure
         break;
     }
 
-    // Always filter by tenant
+    // Always filter by tenant, exclude soft-deleted orders
     const conditions = [
       eq(PurchaseOrder.tenant_id, ctx.tenantId),
+      isNull(PurchaseOrder.deletedAt),
       gte(PurchaseOrder.createdAt, dateFrom),
     ];
 

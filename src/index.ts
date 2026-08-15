@@ -21,6 +21,7 @@ import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
 import { purgeExpiredDeletedProducts } from "./server/controllers/productControllers/helpers/purgeExpiredProducts.ts"
 import { purgeExpiredDeletedSuppliers } from "./server/controllers/supplierControllers/helpers/purgeExpiredSuppliers.ts"
 import { purgeExpiredDeletedCategories } from "./server/controllers/categoryControllers/helpers/purgeExpiredCategories.ts"
+import { purgeExpiredDeletedTaxRates } from "./server/controllers/taxRateControllers/helpers/purgeExpiredTaxRates.ts"
 import { sendInventoryCountReminders } from "./server/controllers/inventoryCountControllers/helpers/sendInventoryCountReminders.ts"
 
 dotenv.config()
@@ -178,6 +179,28 @@ app.post("/api/cron/category-purge", async (req, res) => {
     return res.json({ success: true, checked, purged })
   } catch (error) {
     logger.error({ error }, "Cron category-purge failed")
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+// Cron endpoint: called by Railway cron every hour
+// Schedule: 0 * * * *
+// Command: curl -X POST https://your-api.railway.app/api/cron/tax-rate-purge -H "Authorization: Bearer $CRON_SECRET"
+// Hard-deletes tax rates soft-deleted more than 24h ago that no longer have
+// any referencing product/category/location default; rates still referenced
+// stay soft-deleted permanently (see purgeExpiredTaxRates.ts).
+app.post("/api/cron/tax-rate-purge", async (req, res) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: "Unauthorized" })
+  }
+
+  try {
+    const { checked, purged } = await purgeExpiredDeletedTaxRates(db)
+    logger.info({ checked, purged }, "Tax rate purge cron completed")
+    return res.json({ success: true, checked, purged })
+  } catch (error) {
+    logger.error({ error }, "Cron tax-rate-purge failed")
     return res.status(500).json({ error: "Internal server error" })
   }
 })

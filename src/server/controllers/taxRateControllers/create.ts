@@ -1,12 +1,16 @@
 import z from "zod"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { TaxRate } from "../../../db/schema/taxRate.ts"
 import { TRPCError } from "@trpc/server"
 import { eq } from "drizzle-orm"
 import { handleDbError } from "../../../utils/dbErrors.ts"
 import { TAX_TYPE } from "../../../types/tax.ts"
 
-export const createTaxRateProcedure = authedMutation
+// Tax rate config is finance-sensitive — unlike Category (authedMutation,
+// any authenticated user), creating/editing/deleting a rate is restricted
+// to elevated roles (adminMutation actually checks hasElevatedRole:
+// ADMIN or MANAGER, despite the name).
+export const createTaxRateProcedure = adminMutation
   .input(
     z.object({
       name: z.string().min(1),

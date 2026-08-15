@@ -4,6 +4,9 @@ import {
   getTaxRateByIdProcedure,
   updateTaxRateProcedure,
   deleteTaxRateProcedure,
+  restoreTaxRateProcedure,
+  getDeletedTaxRatesProcedure,
+  getTaxRateAuditLogProcedure,
 } from "../../controllers/taxRateControllers/index.ts"
 
 import { t } from "../../trpc.ts"
@@ -14,4 +17,7 @@ export const taxRateRouter = t.router({
   getById: getTaxRateByIdProcedure,
   update: updateTaxRateProcedure,
   delete: deleteTaxRateProcedure,
+  restore: restoreTaxRateProcedure,
+  getDeleted: getDeletedTaxRatesProcedure,
+  getAuditLog: getTaxRateAuditLogProcedure,
 })

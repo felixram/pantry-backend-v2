@@ -1,4 +1,4 @@
-import { boolean, index, pgTable, real, text, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core"
+import { index, pgTable, real, text, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core"
 import { createdAt, deletedAt, id, updatedAt } from "../schemaHelpers.ts"
 import { relations, sql } from "drizzle-orm"
 import { Tenant } from "./tenant.ts"
@@ -13,7 +13,6 @@ export const TaxRate = pgTable(
     name: text().notNull(),
     rate: real().notNull(),
     type: varchar("type", { length: 20 }).notNull(), // "purchase", "sales", or "both"
-    is_default: boolean("is_default").default(false),
     createdAt,
     updatedAt,
     deletedAt,

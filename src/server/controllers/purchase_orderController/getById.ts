@@ -4,7 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts";
 import { TaxRate } from "../../../db/schema/taxRate.ts";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, inArray } from "drizzle-orm";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { resolveApplicableTaxRate } from "../../../utils/taxResolution.ts";
@@ -58,41 +58,34 @@ export const getPurchaseOrderById = authedProcedure
       validateLocationAccess(ctx.user!, ctx.userLocationId, purchaseOrder.destination_location_id);
     }
 
-    // Resolve location's default purchase tax rate
-    let locationPurchaseTaxRate: { id: string; rate: number; name: string } | null = null;
+    // Collect every unique tax rate ID we need (location default + per-item
+    // product/category overrides), then resolve them all in one batched,
+    // tenant-scoped query instead of one findFirst per id in a loop — the
+    // previous version issued N+1 queries here and, unlike every other
+    // tax-rate lookup in the codebase, didn't scope by tenant_id at all.
     const loc = purchaseOrder.destinationLocation as any;
-    if (loc?.default_purchase_tax_rate_id) {
-      const taxRate = await ctx.db.query.TaxRate.findFirst({
-        where: eq(TaxRate.id, loc.default_purchase_tax_rate_id),
-      });
-      if (taxRate) {
-        locationPurchaseTaxRate = { id: taxRate.id, rate: taxRate.rate, name: taxRate.name };
-      }
-    }
-
-    // Collect all unique tax rate IDs we need to look up (from products and categories)
     const taxRateIds = new Set<string>();
+    if (loc?.default_purchase_tax_rate_id) taxRateIds.add(loc.default_purchase_tax_rate_id);
     for (const item of purchaseOrder.purchaseOrderItems) {
       const product = item.product as any;
       if (product?.tax_rate_id) taxRateIds.add(product.tax_rate_id);
       if (product?.category?.tax_rate_id) taxRateIds.add(product.category.tax_rate_id);
     }
 
-    // Batch-fetch all tax rates
     const taxRateMap = new Map<string, { rate: number; name: string }>();
-    if (locationPurchaseTaxRate) {
-      taxRateMap.set(locationPurchaseTaxRate.id, { rate: locationPurchaseTaxRate.rate, name: locationPurchaseTaxRate.name });
-    }
-    for (const id of taxRateIds) {
-      if (!taxRateMap.has(id)) {
-        const tr = await ctx.db.query.TaxRate.findFirst({
-          where: eq(TaxRate.id, id),
-        });
-        if (tr) {
-          taxRateMap.set(tr.id, { rate: tr.rate, name: tr.name });
-        }
+    if (taxRateIds.size > 0) {
+      const taxRates = await ctx.db.query.TaxRate.findMany({
+        where: and(inArray(TaxRate.id, [...taxRateIds]), eq(TaxRate.tenant_id, ctx.tenantId!)),
+      });
+      for (const tr of taxRates) {
+        taxRateMap.set(tr.id, { rate: tr.rate, name: tr.name });
       }
     }
+
+    const locationPurchaseTaxRate =
+      loc?.default_purchase_tax_rate_id && taxRateMap.has(loc.default_purchase_tax_rate_id)
+        ? { id: loc.default_purchase_tax_rate_id as string, ...taxRateMap.get(loc.default_purchase_tax_rate_id)! }
+        : null;
 
     // Fetch audit logs with user information
     const auditLogs = await ctx.db.query.PurchaseOrderAudit.findMany({

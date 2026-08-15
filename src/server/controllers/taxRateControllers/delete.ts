@@ -1,10 +1,11 @@
 import z from "zod"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { TaxRate } from "../../../db/schema/taxRate.ts"
+import { TaxRateAudit } from "../../../db/schema/taxRateAudit.ts"
 import { and, eq, isNull } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 
-export const deleteTaxRateProcedure = authedMutation
+export const deleteTaxRateProcedure = adminMutation
   .input(z.object({ id: z.string().uuid() }))
   .mutation(async ({ ctx, input }) => {
     if (!ctx.tenantId) {
@@ -14,12 +15,16 @@ export const deleteTaxRateProcedure = authedMutation
       })
     }
 
+    // Tenant-scoped existence check — also makes this idempotent-safe:
+    // deleting an already-deleted (or another tenant's) rate now 404s
+    // instead of silently "succeeding" again.
     const existing = await ctx.db.query.TaxRate.findFirst({
       where: and(
         eq(TaxRate.id, input.id),
         eq(TaxRate.tenant_id, ctx.tenantId),
         isNull(TaxRate.deletedAt)
       ),
+      columns: { id: true, name: true },
     })
 
     if (!existing) {
@@ -29,10 +34,19 @@ export const deleteTaxRateProcedure = authedMutation
       })
     }
 
-    await ctx.db
-      .update(TaxRate)
-      .set({ deletedAt: new Date() })
-      .where(eq(TaxRate.id, input.id))
+    await ctx.db.transaction(async (tx) => {
+      await tx
+        .update(TaxRate)
+        .set({ deletedAt: new Date() })
+        .where(and(eq(TaxRate.id, input.id), eq(TaxRate.tenant_id, ctx.tenantId!)))
+      await tx.insert(TaxRateAudit).values({
+        taxRateId: input.id,
+        taxRateName: existing.name,
+        tenant_id: ctx.tenantId!,
+        action: "deleted",
+        userId: ctx.user!.id,
+      })
+    })
 
     return { message: "Tax rate deleted" }
   })

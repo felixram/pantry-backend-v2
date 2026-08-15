@@ -1,12 +1,12 @@
 import z from "zod"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { TaxRate } from "../../../db/schema/taxRate.ts"
 import { and, eq, isNull } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 import { handleDbError } from "../../../utils/dbErrors.ts"
 import { TAX_TYPE } from "../../../types/tax.ts"
 
-export const updateTaxRateProcedure = authedMutation
+export const updateTaxRateProcedure = adminMutation
   .input(
     z.object({
       id: z.string().uuid(),

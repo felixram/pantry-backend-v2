@@ -81,11 +81,25 @@ export async function syncProductUnits(
   });
   const oldBaseUnitName = existingConversions.find((c) => c.is_base_unit)?.unit_name;
 
+  // Tenant-scoped: upsertConversions.ts (unlike update.ts/deleteConversion.ts,
+  // whose callers pre-validate ownership before ever reaching this helper)
+  // used to pass productId straight from client input with no ownership
+  // check at all, so an unscoped lookup here would let it write into another
+  // tenant's product. This is the one place in the codebase that writes
+  // Product.unit, so enforcing it centrally here protects every caller,
+  // present and future, instead of relying on each one to remember to
+  // pre-validate.
   const product = await tx.query.Product.findFirst({
-    where: eq(Product.id, productId),
+    where: and(eq(Product.id, productId), eq(Product.tenant_id, tenantId)),
     columns: { activeVersionId: true },
   });
-  if (product?.activeVersionId) {
+  if (!product) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Product not found.",
+    });
+  }
+  if (product.activeVersionId) {
     const version = await tx.query.ProductVersion.findFirst({
       where: eq(ProductVersion.id, product.activeVersionId),
       columns: { costPriceUnit: true, sellingPriceUnit: true },
@@ -145,7 +159,7 @@ export async function syncProductUnits(
     );
   }
 
-  await tx.update(Product).set({ unit: newUnitNames }).where(eq(Product.id, productId));
+  await tx.update(Product).set({ unit: newUnitNames }).where(and(eq(Product.id, productId), eq(Product.tenant_id, tenantId)));
 
   // Stale Stock.display_unit values (referencing a unit that no longer
   // exists for this product) get cleared rather than left dangling — every

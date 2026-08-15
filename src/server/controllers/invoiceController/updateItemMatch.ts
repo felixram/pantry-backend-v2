@@ -1,6 +1,7 @@
 import { and, eq, isNull, sql } from "drizzle-orm"
 import { Invoice } from "../../../db/schema/invoice.ts"
 import { InvoiceItem } from "../../../db/schema/invoiceItem.ts"
+import { Product } from "../../../db/schema/product.ts"
 import { ProductAlias } from "../../../db/schema/productAlias.ts"
 import { INVOICE_STATUS } from "../../../types/invoice.ts"
 import { adminMutation } from "../../trpc.ts"
@@ -47,6 +48,21 @@ export const updateItemMatchProcedure = adminMutation
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "Cannot modify items on a finalized invoice",
+      })
+    }
+
+    // input.productId used to flow straight into confirmed_product_id (and
+    // from there into confirmInvoice.ts's product/version/stock writes) with
+    // no ownership check at all — a manual match against another tenant's
+    // product id would silently write into that tenant's data on confirm.
+    const targetProduct = await ctx.db.query.Product.findFirst({
+      where: and(eq(Product.id, input.productId), eq(Product.tenant_id, ctx.tenantId)),
+      columns: { id: true },
+    })
+    if (!targetProduct) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Product not found",
       })
     }
 

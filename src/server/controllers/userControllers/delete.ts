@@ -1,16 +1,25 @@
 import { TRPCError } from "@trpc/server"
 import { adminMutation, t } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { z } from "zod"
 import { ROLES, STATUS } from "../../../types/user.ts"
 export const deleteUserProcedure = adminMutation
   .input(z.object({ userId: z.string() }))
   .mutation(async ({ ctx, input }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
+    // Was unscoped by tenant — any elevated user in any tenant could
+    // deactivate any other tenant's user by id.
     const [user] = await ctx.db
       .select()
       .from(User)
-      .where(eq(User.id, input.userId))
+      .where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
 
     if (!user || user.deletedAt)
       throw new TRPCError({
@@ -29,7 +38,7 @@ export const deleteUserProcedure = adminMutation
     const [deletedUser] = await ctx.db
       .update(User)
       .set({ deletedAt: new Date(Date.now()), status: STATUS.inactive })
-      .where(eq(User.id, input.userId))
+      .where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
       .returning()
 
     if (deletedUser?.id === ctx.user?.id)

@@ -3,7 +3,7 @@ import { ROLES, STATUS, isLocationScoped } from "../../../types/user.ts"
 import { adminMutation } from "../../trpc.ts"
 import { hashPassword } from "../../../utils/passwordUtils.ts"
 import { User } from "../../../db/schema/users.ts"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 
 // Password must be at least 8 characters with uppercase, lowercase, and number
@@ -25,10 +25,19 @@ export const adminUpdateProcedure = adminMutation
     })
   )
   .mutation(async ({ input, ctx }) => {
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
     const { password } = input
 
+    // Was unscoped by tenant — any elevated user in any tenant could set
+    // the password/role/status/location of any other tenant's user by id.
     const existingUser = await ctx.db.query.User.findFirst({
-      where: eq(User.id, input.userId),
+      where: and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)),
     })
 
     if (!existingUser || existingUser.deletedAt) {
@@ -111,7 +120,7 @@ export const adminUpdateProcedure = adminMutation
     const [updatedUser] = await ctx.db
       .update(User)
       .set(updateData)
-      .where(eq(User.id, input.userId))
+      .where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
       .returning()
 
     if (!updatedUser) {

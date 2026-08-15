@@ -247,9 +247,13 @@ export const confirmInvoiceProcedure = adminMutation
         const isTaxable = item.is_taxable
         const resolvedTaxRateId = item.confirmed_tax_rate_id ?? item.matched_tax_rate_id
 
-        // Fetch the product with its active version
+        // Fetch the product with its active version — tenant-scoped, since
+        // productId ultimately comes from either the automatic matcher
+        // (already tenant-scoped) or a manual match (now validated in
+        // updateItemMatch.ts, but this loop stays defensively scoped too
+        // rather than trusting that upstream check alone).
         const product = await tx.query.Product.findFirst({
-          where: eq(Product.id, productId),
+          where: and(eq(Product.id, productId), eq(Product.tenant_id, ctx.tenantId!)),
           with: { version: true },
         })
         if (!product) continue
@@ -270,7 +274,7 @@ export const confirmInvoiceProcedure = adminMutation
           productTaxUpdate.tax_rate_id = resolvedTaxRateId
         }
         if (Object.keys(productTaxUpdate).length > 0) {
-          await tx.update(Product).set(productTaxUpdate).where(eq(Product.id, productId))
+          await tx.update(Product).set(productTaxUpdate).where(and(eq(Product.id, productId), eq(Product.tenant_id, ctx.tenantId!)))
           updated = true
         }
 
@@ -298,7 +302,7 @@ export const confirmInvoiceProcedure = adminMutation
               await tx
                 .update(Product)
                 .set({ activeVersionId: inserted.id })
-                .where(eq(Product.id, productId))
+                .where(and(eq(Product.id, productId), eq(Product.tenant_id, ctx.tenantId!)))
             }
             updated = true
           }

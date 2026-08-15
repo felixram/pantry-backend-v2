@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server"
 import { adminMutation } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
 import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts"
-import { eq, count } from "drizzle-orm"
+import { and, eq, count } from "drizzle-orm"
 import { z } from "zod"
 import { ROLES } from "../../../types/user.ts"
 
@@ -14,11 +14,19 @@ export const hardDeleteUserProcedure = adminMutation
     })
   )
   .mutation(async ({ ctx, input }) => {
-    // Find the user to delete
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
+    // Was unscoped by tenant — any elevated user in any tenant could
+    // permanently delete any other tenant's user by id.
     const [userToDelete] = await ctx.db
       .select()
       .from(User)
-      .where(eq(User.id, input.userId))
+      .where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
 
     if (!userToDelete) {
       throw new TRPCError({
@@ -57,7 +65,7 @@ export const hardDeleteUserProcedure = adminMutation
     }
 
     // Safe to delete - permanently remove the user
-    await ctx.db.delete(User).where(eq(User.id, input.userId))
+    await ctx.db.delete(User).where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
 
     return {
       message: "User has been permanently deleted",

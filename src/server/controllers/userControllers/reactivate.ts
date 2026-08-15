@@ -1,18 +1,26 @@
 import { TRPCError } from "@trpc/server"
 import { adminMutation } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
-import { eq, isNotNull } from "drizzle-orm"
+import { and, eq, isNotNull } from "drizzle-orm"
 import { z } from "zod"
 import { ROLES, STATUS } from "../../../types/user.ts"
 
 export const reactivateUserProcedure = adminMutation
   .input(z.object({ userId: z.string() }))
   .mutation(async ({ ctx, input }) => {
-    // Find the deleted user
+    if (!ctx.tenantId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Tenant context required",
+      })
+    }
+
+    // Was unscoped by tenant — any elevated user in any tenant could
+    // reactivate any other tenant's deleted user by id.
     const [deletedUser] = await ctx.db
       .select()
       .from(User)
-      .where(eq(User.id, input.userId))
+      .where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
 
     if (!deletedUser) {
       throw new TRPCError({
@@ -44,7 +52,7 @@ export const reactivateUserProcedure = adminMutation
         status: STATUS.active,
         updatedAt: new Date(),
       })
-      .where(eq(User.id, input.userId))
+      .where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
       .returning()
 
     return {

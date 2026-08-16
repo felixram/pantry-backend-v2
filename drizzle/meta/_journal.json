@@ -477,6 +477,13 @@
       "when": 1786891385529,
       "tag": "0067_chubby_lady_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1786908911274,
+      "tag": "0068_low_gamma_corps",
+      "breakpoints": true
     }
   ]
 }

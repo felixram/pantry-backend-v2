@@ -1,6 +1,7 @@
 import z from "zod";
 import { adminMutation } from "../../trpc.ts";
 import { Location } from "../../../db/schema/location.ts";
+import { LocationAudit } from "../../../db/schema/locationAudit.ts";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { ROLES } from "../../../types/user.ts";
@@ -27,17 +28,27 @@ export const restoreLocationProcedure = adminMutation
 
     const location = await ctx.db.query.Location.findFirst({
       where: and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId), isNotNull(Location.deletedAt)),
-      columns: { id: true },
+      columns: { id: true, name: true },
     });
 
     if (!location) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Deleted location not found." });
     }
 
-    await ctx.db
-      .update(Location)
-      .set({ active: true, deletedAt: null, deletedBy: null })
-      .where(and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId)));
+    await ctx.db.transaction(async (tx) => {
+      await tx
+        .update(Location)
+        .set({ active: true, deletedAt: null, deletedBy: null })
+        .where(and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId!)));
+
+      await tx.insert(LocationAudit).values({
+        locationId: location.id,
+        locationName: location.name,
+        tenant_id: ctx.tenantId!,
+        action: "restored",
+        userId: ctx.user!.id,
+      });
+    });
 
     return { message: "Location restored successfully." };
   });

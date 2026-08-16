@@ -1,6 +1,7 @@
 import z from "zod";
 import { adminMutation } from "../../trpc.ts";
 import { Location } from "../../../db/schema/location.ts";
+import { LocationAudit } from "../../../db/schema/locationAudit.ts";
 import { Stock } from "../../../db/schema/stock.ts";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
@@ -47,15 +48,29 @@ export const deleteLocationProcedure = adminMutation
       })
     }
 
-    const [deletedLocation] = await ctx.db
-      .update(Location)
-      .set({
-        active: false,
-        deletedAt: new Date(Date.now()),
-        deletedBy: ctx.user?.id,
+    const deletedLocation = await ctx.db.transaction(async (tx) => {
+      const [location] = await tx
+        .update(Location)
+        .set({
+          active: false,
+          deletedAt: new Date(Date.now()),
+          deletedBy: ctx.user?.id,
+        })
+        .where(and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId!)))
+        .returning()
+
+      if (!location) return null
+
+      await tx.insert(LocationAudit).values({
+        locationId: location.id,
+        locationName: location.name,
+        tenant_id: ctx.tenantId!,
+        action: "deleted",
+        userId: ctx.user!.id,
       })
-      .where(and(eq(Location.id, input.id), eq(Location.tenant_id, ctx.tenantId)))
-      .returning()
+
+      return location
+    })
 
     if (!deletedLocation) {
       throw new TRPCError({

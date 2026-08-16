@@ -4,7 +4,7 @@ import { Location } from "../../../db/schema/location.ts"
 import { authedProcedure } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
-import { ROLES } from "../../../types/user.ts"
+import { ROLES, STATUS } from "../../../types/user.ts"
 
 export const getAllUsersProcedure = authedProcedure
   .input(
@@ -73,7 +73,10 @@ export const getAllUsersProcedure = authedProcedure
           input.includeDeleted ? sql`TRUE` : isNull(User.deletedAt)
         )
       )
-      .orderBy(User.name)
+      // Inactive accounts always sort last, regardless of the current
+      // search/role/location filters — active-first is the default reading
+      // order for a team list, inactive is reference material.
+      .orderBy(sql`CASE WHEN ${User.status} = ${STATUS.inactive} THEN 1 ELSE 0 END`, User.name)
       .limit(input.limit)
       .offset(input.offset)
 

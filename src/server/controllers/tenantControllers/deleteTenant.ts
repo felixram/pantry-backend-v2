@@ -1,10 +1,12 @@
 import { TRPCError } from "@trpc/server"
+import { clerkClient } from "@clerk/express"
 import { adminMutation } from "../../trpc.ts"
 import { Tenant } from "../../../db/schema/tenant.ts"
 import { User } from "../../../db/schema/users.ts"
 import { and, eq, isNull } from "drizzle-orm"
 import { z } from "zod"
 import { ROLES, STATUS } from "../../../types/user.ts"
+import { logger } from "../../../utils/logger.ts"
 
 export const deleteTenantProcedure = adminMutation
   .input(
@@ -61,14 +63,16 @@ export const deleteTenantProcedure = adminMutation
         .where(eq(Tenant.id, tenant.id))
     })
 
-    // Clear the requesting admin's auth cookie
-    ctx.res.cookie("token", "", {
-      httpOnly: true,
-      expires: new Date(0),
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      path: "/",
-    })
+    // Best-effort: also delete the Clerk Organization itself. A Clerk-side
+    // failure here shouldn't block the local deletion this procedure exists
+    // for — mirrors hardDelete.ts's best-effort Clerk-user deletion.
+    if (ctx.clerkOrgId) {
+      try {
+        await clerkClient.organizations.deleteOrganization(ctx.clerkOrgId)
+      } catch (err) {
+        logger.error({ err, clerkOrgId: ctx.clerkOrgId }, "Failed to delete Clerk organization after local tenant delete")
+      }
+    }
 
     return {
       message: "Organization has been deleted. All users have been logged out.",

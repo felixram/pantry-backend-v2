@@ -68,12 +68,25 @@ export async function handleClerkWebhook(req: Request, res: Response) {
           break
         }
 
+        // organization.created isn't guaranteed to have arrived first — an
+        // org created via the Backend API with `created_by` in one call
+        // (which is what self-serve "create an organization" ultimately
+        // does) only reliably fires this event, not a separate
+        // organization.created. Upsert here too rather than erroring out
+        // and silently dropping the membership (and the new user with it).
+        await db
+          .insert(Tenant)
+          .values({ name: organization.name, slug: organization.slug || organization.id, clerk_org_id: organization.id })
+          .onConflictDoNothing({ target: Tenant.clerk_org_id })
+
         const [tenant] = await db
           .select({ id: Tenant.id })
           .from(Tenant)
           .where(and(eq(Tenant.clerk_org_id, organization.id), isNull(Tenant.deletedAt)))
         if (!tenant) {
-          logger.error({ orgId: organization.id }, "organizationMembership event for unknown tenant")
+          // Only reachable if the tenant was soft-deleted between the
+          // upsert and this re-select — genuinely exceptional now.
+          logger.error({ orgId: organization.id }, "organizationMembership event for unresolvable tenant")
           break
         }
 

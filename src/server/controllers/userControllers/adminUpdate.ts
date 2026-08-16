@@ -118,7 +118,7 @@ export const adminUpdateProcedure = adminMutation
       if (!ctx.clerkOrgId || !existingUser.clerk_user_id) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "This user isn't fully linked to Clerk yet.",
+          message: "This user hasn't accepted their invitation yet, so their role can't be changed.",
         })
       }
       await clerkClient.organizations.updateOrganizationMembership({

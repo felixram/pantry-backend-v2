@@ -7,6 +7,7 @@ import { and, eq, count } from "drizzle-orm"
 import { z } from "zod"
 import { ROLES } from "../../../types/user.ts"
 import { logger } from "../../../utils/logger.ts"
+import { handleDbError } from "../../../utils/dbErrors.ts"
 
 export const hardDeleteUserProcedure = adminMutation
   .input(
@@ -52,7 +53,9 @@ export const hardDeleteUserProcedure = adminMutation
       })
     }
 
-    // Check if user has any audit log references
+    // Check if user has any purchase order audit log references — the one
+    // history table worth a friendly pre-check message, since it's the most
+    // common reason a real team member can't be hard-deleted.
     const auditCountResult = await ctx.db
       .select({ count: count() })
       .from(PurchaseOrderAudit)
@@ -62,12 +65,24 @@ export const hardDeleteUserProcedure = adminMutation
     if (auditCount > 0) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: `Cannot hard delete: User has ${auditCount} audit ${auditCount === 1 ? "entry" : "entries"}`,
+        message: `Cannot hard delete: User has ${auditCount} purchase order audit ${auditCount === 1 ? "entry" : "entries"}`,
       })
     }
 
-    // Safe to delete - permanently remove the user
-    await ctx.db.delete(User).where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
+    // Several other tables (stock movements, invoices, inventory count
+    // sessions, category/product/supplier/tax-rate audit logs, locations'
+    // deletedBy) also reference User without cascading — rather than
+    // pre-checking every one of them here (fragile, easy to miss a future
+    // addition), let Postgres's own foreign key constraints be the source of
+    // truth and translate a violation into a clear message.
+    try {
+      await ctx.db.delete(User).where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
+    } catch (error) {
+      throw handleDbError(error, {
+        foreignKeyViolation:
+          "Cannot hard delete: this user has other history (stock movements, invoices, inventory counts, etc.) referencing them.",
+      })
+    }
 
     // Best-effort: also delete the Clerk User account entirely (our model is
     // 1 user = 1 tenant membership). A Clerk-side failure here shouldn't

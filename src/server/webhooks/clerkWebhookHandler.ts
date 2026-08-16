@@ -1,5 +1,6 @@
 import type { Request, Response } from "express"
 import { verifyWebhook } from "@clerk/express/webhooks"
+import { clerkClient } from "@clerk/express"
 import { and, eq, isNull } from "drizzle-orm"
 import { db } from "../../db/index.ts"
 import { User } from "../../db/schema/users.ts"
@@ -11,6 +12,22 @@ const ORG_ROLE_TO_ROLE: Record<string, string> = {
   "org:admin": ROLES.admin,
   "org:manager": ROLES.manager,
   "org:member": ROLES.user,
+}
+
+/**
+ * Recovers the location_id an invite.ts caller attached to the invitation's
+ * publicMetadata (Clerk has no native concept of location) — read back here
+ * on first join rather than via a second organizationInvitation.accepted
+ * webhook subscription, avoiding any event-ordering race between the two.
+ */
+async function lookupInvitedLocationId(organizationId: string, email: string): Promise<string | null> {
+  const { data: invitations } = await clerkClient.organizations.getOrganizationInvitationList({
+    organizationId,
+    status: ["accepted"],
+  })
+  const invitation = invitations.find((inv) => inv.emailAddress === email)
+  const locationId = (invitation?.publicMetadata as Record<string, unknown> | undefined)?.location_id
+  return typeof locationId === "string" ? locationId : null
 }
 
 /**
@@ -93,6 +110,9 @@ export async function handleClerkWebhook(req: Request, res: Response) {
           .where(and(eq(User.email, email), eq(User.tenant_id, tenant.id)))
 
         if (existingByEmail) {
+          // Pre-existing (e.g. migration-seeded) row — its location_id is
+          // real app data set by an admin, not something to overwrite from
+          // the invitation.
           await db
             .update(User)
             .set({
@@ -105,6 +125,7 @@ export async function handleClerkWebhook(req: Request, res: Response) {
             })
             .where(eq(User.id, existingByEmail.id))
         } else {
+          const location_id = await lookupInvitedLocationId(organization.id, email)
           await db.insert(User).values({
             clerk_user_id: public_user_data.user_id,
             tenant_id: tenant.id,
@@ -113,6 +134,7 @@ export async function handleClerkWebhook(req: Request, res: Response) {
             email,
             role: mappedRole,
             status: STATUS.active,
+            location_id,
           })
         }
         break

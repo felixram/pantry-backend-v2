@@ -8,6 +8,8 @@ import { getAllUsersProcedure } from "../../controllers/userControllers/getAll.t
 import { getUserByIdProcedure } from "../../controllers/userControllers/getById.ts"
 import { inviteUserProcedure } from "../../controllers/userControllers/invite.ts"
 import { resendInvitationProcedure } from "../../controllers/userControllers/resendInvitation.ts"
+import { getPendingInvitationsProcedure } from "../../controllers/userControllers/getPendingInvitations.ts"
+import { revokeInvitationProcedure } from "../../controllers/userControllers/revokeInvitation.ts"
 
 export const userRouter = t.router({
   update: updateUser,
@@ -19,4 +21,6 @@ export const userRouter = t.router({
   getById: getUserByIdProcedure,
   invite: inviteUserProcedure,
   resendInvitation: resendInvitationProcedure,
+  getPendingInvitations: getPendingInvitationsProcedure,
+  revokeInvitation: revokeInvitationProcedure,
 })

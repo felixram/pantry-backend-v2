@@ -19,10 +19,10 @@ const ROLE_TO_ORG_ROLE: Record<string, string> = {
  * creation/credentials from here on. ADMIN can invite any role to any
  * location; MANAGER can only invite USER role to their own location.
  *
- * location_id can't travel with the Clerk invitation (Clerk has no concept
- * of it): the local User row is created by the
- * organizationMembership.created webhook on acceptance with location_id
- * left null, and an admin assigns it afterward via adminUpdate.
+ * location_id travels in the invitation's publicMetadata (Clerk has no
+ * native concept of it) — clerkWebhookHandler.ts's
+ * organizationMembership.created handler reads it back from the accepted
+ * invitation when creating the local User row.
  */
 export const inviteUserProcedure = authedMutation
   .input(
@@ -107,6 +107,7 @@ export const inviteUserProcedure = authedMutation
       inviterUserId: ctx.clerkUserId,
       emailAddress: input.email,
       role: ROLE_TO_ORG_ROLE[input.role]!,
+      publicMetadata: { location_id: input.location_id ?? null },
       // Without this, Clerk's invitation link points at its own hosted
       // Account Portal, which 404s for a dev instance not set up for it —
       // route through our own /sign-up page instead (reads __clerk_ticket).

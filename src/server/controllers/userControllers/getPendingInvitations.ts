@@ -9,10 +9,20 @@ const ORG_ROLE_TO_ROLE: Record<string, string> = {
   "org:member": ROLES.user,
 }
 
+function invitationLocationId(publicMetadata: unknown): string | null {
+  const locationId = (publicMetadata as Record<string, unknown> | undefined)?.location_id
+  return typeof locationId === "string" ? locationId : null
+}
+
 /**
  * Pending invitations live entirely in Clerk (no local "pending user" row
  * exists until acceptance) — this is the only way the Users page can show
  * them at all.
+ *
+ * MANAGER can only invite USER role to their own location (see invite.ts),
+ * so mirror that same restriction here — otherwise a manager would see (and
+ * via resendInvitation/revokeInvitation, be able to act on) ADMIN/MANAGER
+ * invitations or ones for a different location entirely.
  */
 export const getPendingInvitationsProcedure = adminProcedure.query(async ({ ctx }) => {
   if (!ctx.clerkOrgId) {
@@ -27,7 +37,14 @@ export const getPendingInvitationsProcedure = adminProcedure.query(async ({ ctx 
     status: ["pending"],
   })
 
-  return invitations.map((inv) => ({
+  const visible =
+    ctx.user!.role === ROLES.manager
+      ? invitations.filter(
+          (inv) => inv.role === "org:member" && invitationLocationId(inv.publicMetadata) === ctx.userLocationId
+        )
+      : invitations
+
+  return visible.map((inv) => ({
     id: inv.id,
     email: inv.emailAddress,
     role: ORG_ROLE_TO_ROLE[inv.role] ?? inv.role,

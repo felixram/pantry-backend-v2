@@ -2,13 +2,21 @@ import z from "zod"
 import { clerkClient } from "@clerk/express"
 import { adminMutation } from "../../trpc.ts"
 import { TRPCError } from "@trpc/server"
+import { ROLES } from "../../../types/user.ts"
+
+function invitationLocationId(publicMetadata: unknown): string | null {
+  const locationId = (publicMetadata as Record<string, unknown> | undefined)?.location_id
+  return typeof locationId === "string" ? locationId : null
+}
 
 /**
- * Admin-only: revoke and recreate a pending Clerk org invitation for an
- * email, which resends the invite email. There's no local "pending user"
- * row anymore — a pending invite lives entirely in Clerk until accepted,
- * at which point the organizationMembership.created webhook creates the
- * local User row.
+ * Revoke and recreate a pending Clerk org invitation for an email, which
+ * resends the invite email. There's no local "pending user" row anymore —
+ * a pending invite lives entirely in Clerk until accepted, at which point
+ * the organizationMembership.created webhook creates the local User row.
+ *
+ * MANAGER can only invite (and therefore only resend) USER-role invitations
+ * at their own location, same restriction as invite.ts.
  */
 export const resendInvitationProcedure = adminMutation
   .input(z.object({ email: z.string().email("Invalid email format") }))
@@ -30,6 +38,16 @@ export const resendInvitationProcedure = adminMutation
       throw new TRPCError({
         code: "NOT_FOUND",
         message: "No pending invitation found for this email.",
+      })
+    }
+
+    if (
+      ctx.user!.role === ROLES.manager &&
+      (existing.role !== "org:member" || invitationLocationId(existing.publicMetadata) !== ctx.userLocationId)
+    ) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "You can only manage invitations for users at your own location",
       })
     }
 

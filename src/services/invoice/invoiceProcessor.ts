@@ -107,13 +107,17 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
       supplierMatch.supplierId
     )
 
-    // 6. Match PO
+    // 6. Match PO — matched_purchase_order_id may already be set here if
+    // this invoice was uploaded via "Attach Invoice" from a specific PO's
+    // detail page; matchPurchaseOrder() treats that as authoritative
+    // instead of letting the AI-extraction search below overwrite it.
     const poMatch = await matchPurchaseOrder(
       db,
       invoice.tenant_id,
       extracted,
       supplierMatch.supplierId,
-      productMatches.map((m) => m.productId)
+      productMatches.map((m) => m.productId),
+      invoice.matched_purchase_order_id
     )
 
     await db

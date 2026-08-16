@@ -24,6 +24,9 @@ interface POMatchResult {
  * Match an invoice to an existing Purchase Order.
  *
  * Priority:
+ * 0. Explicit PO id (e.g. "Attach Invoice" from a PO's own detail page) —
+ *    that link was made intentionally by a person, not inferred, so it
+ *    always wins over anything the AI extraction below might find instead.
  * 1. PO number reference from invoice
  * 2. Supplier + ORDERED status + item overlap scoring
  */
@@ -32,9 +35,41 @@ export async function matchPurchaseOrder(
   tenantId: string,
   extracted: InvoiceExtractionResult,
   matchedSupplierId: string | null,
-  matchedProductIds: (string | null)[]
+  matchedProductIds: (string | null)[],
+  explicitPurchaseOrderId?: string | null
 ): Promise<POMatchResult> {
   const noMatch: POMatchResult = { purchaseOrderId: null, confidence: 0, poItems: [] }
+
+  // 0. Explicit PO id
+  if (explicitPurchaseOrderId) {
+    const po = await db.query.PurchaseOrder.findFirst({
+      where: and(
+        eq(PurchaseOrder.id, explicitPurchaseOrderId),
+        eq(PurchaseOrder.tenant_id, tenantId),
+        isNull(PurchaseOrder.deletedAt)
+      ),
+      with: {
+        purchaseOrderItems: true,
+      },
+    })
+
+    if (po) {
+      return {
+        purchaseOrderId: po.id,
+        confidence: 1,
+        poItems: po.purchaseOrderItems.map((item) => ({
+          poItemId: item.id,
+          productId: item.product_id,
+          qty: item.qty,
+          unitPrice: item.unit_price,
+          unit: item.unit,
+        })),
+      }
+    }
+    // Explicit id didn't resolve (deleted since upload, wrong tenant) —
+    // fall through to normal AI-extraction matching below rather than
+    // silently keeping a dangling reference.
+  }
 
   // 1. PO number reference
   if (extracted.po_reference) {

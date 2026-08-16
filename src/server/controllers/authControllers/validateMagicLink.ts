@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { t } from "../../trpc.ts";
 import { z } from "zod";
-import { verifyToken, createJWT } from "../../../utils/tokenUtils.ts";
+import { verifyToken, createCountSessionToken } from "../../../utils/tokenUtils.ts";
 import { User } from "../../../db/schema/users.ts";
 import { eq, isNull } from "drizzle-orm";
 import { STATUS } from "../../../types/user.ts";
@@ -42,10 +42,13 @@ export const validateMagicLinkProcedure = t.procedure
       throw new TRPCError({ code: "NOT_FOUND", message: "User not found or inactive" });
     }
 
-    const sessionToken = createJWT({ id: user.id, role: user.role });
+    const sessionToken = createCountSessionToken({ id: user.id, role: user.role });
     const sevenDays = 1000 * 60 * 60 * 24 * 7;
 
-    ctx.res.cookie("token", sessionToken, {
+    // Own cookie name, separate from Clerk's session — this flow bypasses
+    // Clerk entirely (magic-link recipients don't have a real Clerk
+    // account). See resolveAuthContext.ts's fallback path.
+    ctx.res.cookie("count_session", sessionToken, {
       httpOnly: true,
       expires: new Date(Date.now() + sevenDays),
       secure: process.env.NODE_ENV === "production",

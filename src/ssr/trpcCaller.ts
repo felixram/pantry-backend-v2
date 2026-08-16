@@ -61,6 +61,8 @@ export async function createServerCaller(user: jwtTypes | null): Promise<ServerC
     userLocationId,
     tenantId,
     isDemoTenant,
+    clerkUserId: null,
+    clerkOrgId: null,
   })
 
   return caller

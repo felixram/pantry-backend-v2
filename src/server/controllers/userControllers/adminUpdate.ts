@@ -1,24 +1,27 @@
 import { z } from "zod"
+import { clerkClient } from "@clerk/express"
 import { ROLES, STATUS, isLocationScoped } from "../../../types/user.ts"
 import { adminMutation } from "../../trpc.ts"
-import { hashPassword } from "../../../utils/passwordUtils.ts"
 import { User } from "../../../db/schema/users.ts"
 import { and, eq } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 
-// Password must be at least 8 characters with uppercase, lowercase, and number
-const passwordSchema = z.string()
-  .min(8, "Password must be at least 8 characters")
-  .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-  .regex(/\d/, "Password must contain at least one number")
+const ROLE_TO_ORG_ROLE: Record<string, string> = {
+  [ROLES.admin]: "org:admin",
+  [ROLES.manager]: "org:manager",
+  [ROLES.user]: "org:member",
+}
 
-//procedure to update third party accounts
+// Admin/manager updates to another user's role/status/location. Credentials
+// are Clerk's job now (no more password field). Role changes go through
+// Clerk's org membership first (source of truth) — the local `role` mirror
+// column is left for the organizationMembership.updated webhook to resync
+// rather than being written here directly, so it can never drift from what
+// Clerk actually granted.
 export const adminUpdateProcedure = adminMutation
   .input(
     z.object({
       userId: z.string().uuid("Invalid user ID"),
-      password: passwordSchema.optional(),
       role: z.enum(Object.values(ROLES)).optional(),
       status: z.enum(Object.values(STATUS)).optional(),
       location_id: z.string().uuid().nullable().optional(), // Nullable to clear, optional to skip
@@ -32,10 +35,6 @@ export const adminUpdateProcedure = adminMutation
       })
     }
 
-    const { password } = input
-
-    // Was unscoped by tenant — any elevated user in any tenant could set
-    // the password/role/status/location of any other tenant's user by id.
     const existingUser = await ctx.db.query.User.findFirst({
       where: and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)),
     })
@@ -73,9 +72,7 @@ export const adminUpdateProcedure = adminMutation
       updatedAt: new Date(Date.now()),
     }
 
-    if (input.role) updateData.role = input.role
     if (input.status) updateData.status = input.status
-    if (password) updateData.password = await hashPassword(password)
 
     // Handle location_id updates with role-based validation
     if (input.location_id !== undefined) {
@@ -115,6 +112,22 @@ export const adminUpdateProcedure = adminMutation
         // Auto-clear location when promoting to admin
         updateData.location_id = null
       }
+    }
+
+    if (input.role && input.role !== existingUser.role) {
+      if (!ctx.clerkOrgId || !existingUser.clerk_user_id) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This user isn't fully linked to Clerk yet.",
+        })
+      }
+      await clerkClient.organizations.updateOrganizationMembership({
+        organizationId: ctx.clerkOrgId,
+        userId: existingUser.clerk_user_id,
+        role: ROLE_TO_ORG_ROLE[input.role]!,
+      })
+      // role itself is intentionally left off updateData — the
+      // organizationMembership.updated webhook resyncs the local mirror.
     }
 
     const [updatedUser] = await ctx.db

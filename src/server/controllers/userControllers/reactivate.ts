@@ -1,9 +1,16 @@
 import { TRPCError } from "@trpc/server"
+import { clerkClient } from "@clerk/express"
 import { adminMutation } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
-import { and, eq, isNotNull } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { z } from "zod"
 import { ROLES, STATUS } from "../../../types/user.ts"
+
+const ROLE_TO_ORG_ROLE: Record<string, string> = {
+  [ROLES.admin]: "org:admin",
+  [ROLES.manager]: "org:manager",
+  [ROLES.user]: "org:member",
+}
 
 export const reactivateUserProcedure = adminMutation
   .input(z.object({ userId: z.string() }))
@@ -41,6 +48,16 @@ export const reactivateUserProcedure = adminMutation
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "User is already active",
+      })
+    }
+
+    // delete.ts removes the Clerk org membership on soft-delete — restore it
+    // so the user can actually sign back in, not just look active locally.
+    if (ctx.clerkOrgId && deletedUser.clerk_user_id) {
+      await clerkClient.organizations.createOrganizationMembership({
+        organizationId: ctx.clerkOrgId,
+        userId: deletedUser.clerk_user_id,
+        role: ROLE_TO_ORG_ROLE[deletedUser.role] ?? "org:member",
       })
     }
 

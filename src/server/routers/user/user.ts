@@ -1,5 +1,4 @@
 import { t } from "../../trpc.ts"
-import { createUserProcedure } from "../../controllers/userControllers/create.ts"
 import { updateUser } from "../../controllers/userControllers/update.ts"
 import { deleteUserProcedure } from "../../controllers/userControllers/delete.ts"
 import { reactivateUserProcedure } from "../../controllers/userControllers/reactivate.ts"
@@ -11,7 +10,6 @@ import { inviteUserProcedure } from "../../controllers/userControllers/invite.ts
 import { resendInvitationProcedure } from "../../controllers/userControllers/resendInvitation.ts"
 
 export const userRouter = t.router({
-  create: createUserProcedure,
   update: updateUser,
   adminUpdate: adminUpdateProcedure,
   delete: deleteUserProcedure,

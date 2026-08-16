@@ -18,11 +18,12 @@ export const Tenant = pgTable(
     slug: text().notNull().unique(),
     plan: varchar("plan", { length: 20 }).notNull().default(PLANS.free),
     is_demo: boolean("is_demo").notNull().default(false),
+    clerk_org_id: text("clerk_org_id").unique(),
     createdAt,
     updatedAt,
     deletedAt,
   },
-  (t) => [index().on(t.slug)]
+  (t) => [index().on(t.slug), index().on(t.clerk_org_id)]
 )
 
 // Relations will be added after other schemas reference Tenant

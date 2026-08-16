@@ -2,14 +2,12 @@ import { Router } from "express"
 import multer from "multer"
 import { db } from "../../db/index.ts"
 import { Invoice } from "../../db/schema/invoice.ts"
-import { User } from "../../db/schema/users.ts"
-import { Tenant } from "../../db/schema/tenant.ts"
 import { INVOICE_STATUS } from "../../types/invoice.ts"
-import { verifyToken } from "../../utils/tokenUtils.ts"
+import { resolveAuthContext } from "../../utils/resolveAuthContext.ts"
 import { uploadInvoiceFile } from "../../services/storage/r2Client.ts"
 import { processInvoice } from "../../services/invoice/invoiceProcessor.ts"
 import { logger } from "../../utils/logger.ts"
-import { and, eq, isNull } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 
 const ALLOWED_MIME_TYPES = [
   "application/pdf",
@@ -36,51 +34,18 @@ export const invoiceUploadRouter = Router()
 
 invoiceUploadRouter.post("/upload", upload.array("files", 10), async (req, res) => {
   try {
-    // Auth: read JWT from cookie (same pattern as context.ts)
-    const token = req.cookies?.token
-    if (!token) {
+    const { user, tenantId, userLocationId } = await resolveAuthContext(req)
+    if (!user || !tenantId) {
       return res.status(401).json({ error: "Authentication required" })
     }
 
-    let jwtPayload
-    try {
-      jwtPayload = verifyToken(token)
-    } catch {
-      return res.status(401).json({ error: "Invalid or expired token" })
-    }
-
-    // Fetch user's tenant and location
-    const [dbUser] = await db
-      .select({
-        id: User.id,
-        tenant_id: User.tenant_id,
-        location_id: User.location_id,
-      })
-      .from(User)
-      .where(and(eq(User.id, jwtPayload.id), isNull(User.deletedAt)))
-
-    if (!dbUser?.tenant_id) {
-      return res.status(401).json({ error: "User not found or inactive" })
-    }
-
-    // Verify tenant is not deleted
-    const [tenant] = await db
-      .select({ id: Tenant.id })
-      .from(Tenant)
-      .where(and(eq(Tenant.id, dbUser.tenant_id), isNull(Tenant.deletedAt)))
-
-    if (!tenant) {
-      return res.status(401).json({ error: "Tenant not found or inactive" })
-    }
-
-    const tenantId = dbUser.tenant_id
     const files = req.files as Express.Multer.File[]
 
     if (!files || files.length === 0) {
       return res.status(400).json({ error: "No files provided" })
     }
 
-    const locationId = req.body?.location_id || dbUser.location_id || null
+    const locationId = req.body?.location_id || userLocationId || null
     const purchaseOrderId = req.body?.purchase_order_id || null
 
     const invoiceIds: string[] = []

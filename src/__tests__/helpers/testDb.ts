@@ -2,7 +2,6 @@ import { db } from '../../db/index.js';
 import { sql } from 'drizzle-orm';
 import { User } from '../../db/schema/users.js';
 import { Tenant } from '../../db/schema/tenant.js';
-import { hashPassword } from '../../utils/passwordUtils.js';
 
 // Cache for test tenant to avoid creating multiple
 let testTenantId: string | null = null;
@@ -52,7 +51,6 @@ export async function createTestUser(overrides: Partial<typeof User.$inferInsert
     name: 'Test',
     last_name: 'User',
     email: 'test@example.com',
-    password: await hashPassword('testpassword123'),
     role: 'USER' as const,
     status: 'ACTIVE' as const,
     tenant_id: tenantId,

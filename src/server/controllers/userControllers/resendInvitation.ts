@@ -1,98 +1,54 @@
 import z from "zod"
-import crypto from "crypto"
+import { clerkClient } from "@clerk/express"
 import { adminMutation } from "../../trpc.ts"
-import { User } from "../../../db/schema/users.ts"
-import { Tenant } from "../../../db/schema/tenant.ts"
 import { TRPCError } from "@trpc/server"
-import { and, eq } from "drizzle-orm"
-import { ROLES, STATUS } from "../../../types/user.ts"
-import { sendInvitationEmail } from "../../../services/email/index.ts"
 
 /**
- * Admin-only procedure to resend an invitation to a pending user
- * Generates a new invitation token and extends the expiration time
+ * Admin-only: revoke and recreate a pending Clerk org invitation for an
+ * email, which resends the invite email. There's no local "pending user"
+ * row anymore — a pending invite lives entirely in Clerk until accepted,
+ * at which point the organizationMembership.created webhook creates the
+ * local User row.
  */
 export const resendInvitationProcedure = adminMutation
-  .input(
-    z.object({
-      userId: z.string().uuid("Invalid user ID"),
-    })
-  )
+  .input(z.object({ email: z.string().email("Invalid email format") }))
   .mutation(async ({ input, ctx }) => {
-    // Ensure we have tenant context
-    if (!ctx.tenantId) {
+    if (!ctx.tenantId || !ctx.clerkOrgId || !ctx.clerkUserId) {
       throw new TRPCError({
         code: "UNAUTHORIZED",
         message: "Tenant context required",
       })
     }
 
-    // Find the user - must be in the same tenant and have PENDING status
-    const [user] = await ctx.db
-      .select()
-      .from(User)
-      .where(
-        and(
-          eq(User.id, input.userId),
-          eq(User.tenant_id, ctx.tenantId),
-          eq(User.status, STATUS.pending)
-        )
-      )
+    const { data: invitations } = await clerkClient.organizations.getOrganizationInvitationList({
+      organizationId: ctx.clerkOrgId,
+      status: ["pending"],
+    })
+    const existing = invitations.find((inv) => inv.emailAddress === input.email)
 
-    if (!user) {
+    if (!existing) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: "User not found or not in pending status.",
+        message: "No pending invitation found for this email.",
       })
     }
 
-    // MANAGER can only resend invitations for users in their location
-    if (ctx.user!.role === ROLES.manager && user.location_id !== ctx.userLocationId) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "You can only manage users in your location",
-      })
-    }
+    await clerkClient.organizations.revokeOrganizationInvitation({
+      organizationId: ctx.clerkOrgId,
+      invitationId: existing.id,
+      requestingUserId: ctx.clerkUserId,
+    })
 
-    // Generate new invitation token
-    const invitationToken = crypto.randomBytes(32).toString("hex")
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000) // 48 hours
-
-    // Update user with new token
-    await ctx.db
-      .update(User)
-      .set({
-        invitation_token: invitationToken,
-        invitation_expires_at: expiresAt,
-      })
-      .where(eq(User.id, user.id))
-
-    // Build invitation URL
-    const clientUrl = process.env.CLIENT_URL || "http://localhost:5173"
-    const inviteUrl = `${clientUrl}/accept-invite?token=${invitationToken}`
-
-    // Fetch tenant name for email
-    const [tenant] = await ctx.db
-      .select({ name: Tenant.name })
-      .from(Tenant)
-      .where(eq(Tenant.id, ctx.tenantId))
-
-    // Send invitation email
-    const emailResult = await sendInvitationEmail({
-      to: user.email,
-      userName: user.name,
-      inviteUrl,
-      organizationName: tenant?.name || "Your Organization",
-      expiresAt,
+    const invitation = await clerkClient.organizations.createOrganizationInvitation({
+      organizationId: ctx.clerkOrgId,
+      inviterUserId: ctx.clerkUserId,
+      emailAddress: input.email,
+      role: existing.role,
     })
 
     return {
       status: "success",
-      message: emailResult.success
-        ? "Invitation resent successfully via email."
-        : "Invitation created. Email delivery failed - share the link manually.",
-      inviteUrl, // Keep for fallback display
-      expiresAt,
-      emailSent: emailResult.success,
+      message: "Invitation resent.",
+      invitationId: invitation.id,
     }
   })

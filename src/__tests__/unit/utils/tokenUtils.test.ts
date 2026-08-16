@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createJWT, verifyToken } from '../../../utils/tokenUtils.js';
+import { createCountSessionToken, verifyToken } from '../../../utils/tokenUtils.js';
 
-describe('unit | tokenUtils', () => {
+describe('unit | tokenUtils (count-session/magic-link)', () => {
   const mockPayload = { id: 'user-123', role: 'ADMIN' };
 
   beforeAll(() => {
@@ -11,9 +11,9 @@ describe('unit | tokenUtils', () => {
     }
   });
 
-  describe('createJWT', () => {
+  describe('createCountSessionToken', () => {
     it('should create a valid JWT token', () => {
-      const token = createJWT(mockPayload);
+      const token = createCountSessionToken(mockPayload);
 
       expect(token).toBeDefined();
       expect(typeof token).toBe('string');
@@ -21,8 +21,8 @@ describe('unit | tokenUtils', () => {
     });
 
     it('should create different tokens for same payload', () => {
-      const token1 = createJWT(mockPayload);
-      const token2 = createJWT(mockPayload);
+      const token1 = createCountSessionToken(mockPayload);
+      const token2 = createCountSessionToken(mockPayload);
 
       // Tokens will differ due to timestamp in JWT
       expect(token1).toBeDefined();
@@ -31,7 +31,7 @@ describe('unit | tokenUtils', () => {
 
     it('should handle USER role', () => {
       const userPayload = { id: 'user-456', role: 'USER' };
-      const token = createJWT(userPayload);
+      const token = createCountSessionToken(userPayload);
 
       expect(token).toBeDefined();
       expect(typeof token).toBe('string');
@@ -40,7 +40,7 @@ describe('unit | tokenUtils', () => {
 
   describe('verifyToken', () => {
     it('should verify and decode a valid token', () => {
-      const token = createJWT(mockPayload);
+      const token = createCountSessionToken(mockPayload);
       const decoded = verifyToken(token);
 
       expect(decoded).toBeDefined();
@@ -68,7 +68,7 @@ describe('unit | tokenUtils', () => {
 
     it('should preserve payload data correctly', () => {
       const payload = { id: 'test-user-789', role: 'ADMIN' };
-      const token = createJWT(payload);
+      const token = createCountSessionToken(payload);
       const decoded = verifyToken(token);
 
       expect(decoded.id).toBe(payload.id);

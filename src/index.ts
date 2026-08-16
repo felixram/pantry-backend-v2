@@ -8,6 +8,7 @@ import { appRouter } from "./server/routers/index.ts"
 import cors from "cors"
 import helmet from "helmet"
 import rateLimit from "express-rate-limit"
+import { clerkMiddleware } from "@clerk/express"
 import { createContext } from "./server/context.ts"
 import cookieParser from "cookie-parser"
 import { db, closeDatabase } from "./db/index.ts"
@@ -17,6 +18,7 @@ import { User } from "./db/schema/users.ts"
 import { Tenant } from "./db/schema/tenant.ts"
 import { Location } from "./db/schema/location.ts"
 import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
+import { handleClerkWebhook } from "./server/webhooks/clerkWebhookHandler.ts"
 import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
 import { purgeExpiredDeletedProducts } from "./server/controllers/productControllers/helpers/purgeExpiredProducts.ts"
 import { purgeExpiredDeletedSuppliers } from "./server/controllers/supplierControllers/helpers/purgeExpiredSuppliers.ts"
@@ -49,6 +51,12 @@ app.use(cors({
   credentials: true,
 }))
 
+// Attaches Clerk auth state to every request (req.auth); doesn't itself
+// block unauthenticated requests — resolveAuthContext.ts / getAuth(req)
+// consumers decide that. Reads the session from the Authorization Bearer
+// header (cross-origin frontend) or the __session cookie (same-origin).
+app.use(clerkMiddleware())
+
 // Rate limiting - scoped to API routes only (disabled in development for testing)
 const isDevelopment = process.env.NODE_ENV === "development"
 
@@ -61,22 +69,13 @@ if (!isDevelopment) {
     message: { error: "Too many requests, please try again later." },
   })
   app.use("/trpc", apiLimiter)
-
-  // Stricter rate limit for auth endpoints
-  const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 20, // 20 login attempts per 15 minutes
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: "Too many login attempts, please try again later." },
-  })
-  app.use("/trpc/auth.login", authLimiter)
 }
 
 app.use(cookieParser())
 // Parse JSON for all routes except those that handle their own body parsing
 app.use((req, res, next) => {
   if (req.path === "/api/webhooks/resend-inbound") return next()
+  if (req.path === "/api/webhooks/clerk") return next()
   if (req.path.startsWith("/api/invoices")) return next()
   express.json()(req, res, next)
 })
@@ -215,6 +214,15 @@ app.post(
   "/api/webhooks/resend-inbound",
   express.raw({ type: "application/json" }),
   handleResendInbound
+)
+
+// Clerk webhook: syncs user/org-membership events into the local User/Tenant
+// read mirror. Needs express.raw() too — signature verification requires
+// the raw body bytes.
+app.post(
+  "/api/webhooks/clerk",
+  express.raw({ type: "application/json" }),
+  handleClerkWebhook
 )
 
 // tRPC middleware

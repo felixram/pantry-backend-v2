@@ -1,9 +1,11 @@
 import { TRPCError } from "@trpc/server"
-import { adminMutation, t } from "../../trpc.ts"
+import { clerkClient } from "@clerk/express"
+import { adminMutation } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
 import { and, eq } from "drizzle-orm"
 import { z } from "zod"
 import { ROLES, STATUS } from "../../../types/user.ts"
+
 export const deleteUserProcedure = adminMutation
   .input(z.object({ userId: z.string() }))
   .mutation(async ({ ctx, input }) => {
@@ -35,21 +37,20 @@ export const deleteUserProcedure = adminMutation
       })
     }
 
-    const [deletedUser] = await ctx.db
+    await ctx.db
       .update(User)
       .set({ deletedAt: new Date(Date.now()), status: STATUS.inactive })
       .where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
-      .returning()
 
-    if (deletedUser?.id === ctx.user?.id)
-      ctx.res.cookie("token", "", {
-        httpOnly: true,
-        expires: new Date(0),
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        path: "/",
+    // Also remove them from the Clerk org so Clerk's own member list stays
+    // accurate (the organizationMembership.deleted webhook will redundantly
+    // re-apply the same local soft-delete, which is fine/idempotent).
+    if (ctx.clerkOrgId && user.clerk_user_id) {
+      await clerkClient.organizations.deleteOrganizationMembership({
+        organizationId: ctx.clerkOrgId,
+        userId: user.clerk_user_id,
       })
+    }
+
     return { message: "User has been deleted." }
   })
-
-//check if the user has been deleted already before perform any action. controll logout. only if it is its own account.

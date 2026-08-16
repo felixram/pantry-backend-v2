@@ -19,10 +19,12 @@ export function isLocationScoped(role: string): boolean {
 
 //user activity
 
+// PENDING was dropped: a local User row is no longer created until a Clerk
+// org invitation is accepted (organizationMembership.created webhook), so
+// there's no more "invited but not yet set up" limbo state to represent.
 export const STATUS = {
   active: "ACTIVE",
   inactive: "INACTIVE",
-  pending: "PENDING",
 } as const
 
 export type userStatus = (typeof STATUS)[keyof typeof STATUS]

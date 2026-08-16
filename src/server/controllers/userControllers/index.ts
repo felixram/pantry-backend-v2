@@ -1,4 +1,3 @@
-export { createUserProcedure } from "./create.ts"
 export { updateUser } from "./update.ts"
 export { adminUpdateProcedure } from "./adminUpdate.ts"
 export { deleteUserProcedure } from "./delete.ts"

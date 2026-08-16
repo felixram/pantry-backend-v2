@@ -1,23 +1,14 @@
 import { t } from "../../trpc.ts"
 import {
-  loginProcedure,
-  logoutProcedure,
   currentProcedure,
-  tenantSignupProcedure,
-  acceptInvitationProcedure,
-  forgotPasswordProcedure,
-  resetPasswordProcedure,
   validateMagicLinkProcedure,
 } from "../../controllers/authControllers/index.ts"
 
-// Auth routes: login, logout, tenant signup, accept invitation, password reset
+// Auth is Clerk's job now (login/logout/signup/invitations/password reset
+// all happen through Clerk directly). `current` merges the Clerk-resolved
+// session with our app-specific fields; `validateMagicLink` is the separate,
+// Clerk-independent inventory-count staff-access flow.
 export const authRouter = t.router({
-  login: loginProcedure,
-  logout: logoutProcedure,
   current: currentProcedure,
-  tenantSignup: tenantSignupProcedure,
-  acceptInvitation: acceptInvitationProcedure,
-  forgotPassword: forgotPasswordProcedure,
-  resetPassword: resetPasswordProcedure,
   validateMagicLink: validateMagicLinkProcedure,
 })

@@ -1,7 +1,13 @@
 import jwt from "jsonwebtoken"
 import type { jwtTypes } from "../types/jwtTypes.ts"
 
-export const createJWT = (payload: jwtTypes) => {
+// Narrow, standalone JWT mechanism for the inventory-count magic-link flow
+// only — normal account sessions are Clerk's job now (see
+// resolveAuthContext.ts). Kept separate because magic-link recipients don't
+// have (and shouldn't need) a real Clerk account.
+
+/** Signs the short-lived cookie set once a magic-link token has been validated. */
+export const createCountSessionToken = (payload: jwtTypes) => {
   const token = jwt.sign(payload, process.env.JWT_SECRET!, {
     expiresIn: "7d",
   })

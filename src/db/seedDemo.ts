@@ -24,14 +24,14 @@ import { PurchaseOrder } from "./schema/purchaseOrder.ts"
 import { PurchaseOrderItem } from "./schema/purchaseOrderItem.ts"
 import { POCounter } from "./schema/poCounter.ts"
 import { TenantInvoiceConfig } from "./schema/tenantInvoiceConfig.ts"
-import { hashPassword } from "../utils/passwordUtils.ts"
+import { clerkClient } from "@clerk/express"
 import { ROLES, STATUS } from "../types/user.ts"
 import { ORDER_STATUS } from "../types/orders.ts"
 import { eq } from "drizzle-orm"
 
 const DEMO_TENANT_SLUG = "vantory-demo"
 const DEMO_EMAIL = "demo@govantory.com"
-const DEMO_PASSWORD = "Demo123!"
+const DEMO_PASSWORD = "VantoryDemo123!" // Clerk instance requires 15+ chars
 
 async function seedDemo() {
   console.log("🌱 Starting demo tenant seed...")
@@ -42,11 +42,83 @@ async function seedDemo() {
   })
 
   if (existingTenant) {
-    console.log("⚠️  Demo tenant already exists. Skipping seed.")
+    console.log("⚠️  Demo tenant already exists. Skipping sample-data seed.")
     console.log(`   Tenant ID: ${existingTenant.id}`)
+
+    // Pre-dates the Clerk migration — link it retroactively instead of
+    // leaving a demo tenant with no working login at all. Org-linking and
+    // user-linking are checked independently since a prior partial run can
+    // leave either one done and the other not.
+    let clerkOrgId = existingTenant.clerk_org_id
+    if (!clerkOrgId) {
+      console.log("🔑 Tenant isn't linked to Clerk yet — creating org...")
+      const clerkOrg = await clerkClient.organizations.createOrganization({
+        name: existingTenant.name,
+      })
+      clerkOrgId = clerkOrg.id
+      await db.update(Tenant).set({ clerk_org_id: clerkOrgId }).where(eq(Tenant.id, existingTenant.id))
+    }
+
+    const existingAdmin = await db.query.User.findFirst({
+      where: eq(User.email, DEMO_EMAIL),
+    })
+
+    if (existingAdmin?.clerk_user_id) {
+      console.log("   Demo admin user already linked to Clerk.")
+    } else {
+      console.log("🔑 Demo admin isn't linked to Clerk yet — creating user...")
+      const clerkUser = await clerkClient.users.createUser({
+        emailAddress: [DEMO_EMAIL],
+        password: DEMO_PASSWORD,
+        firstName: "Demo",
+        lastName: "Admin",
+      })
+      await clerkClient.organizations.createOrganizationMembership({
+        organizationId: clerkOrgId,
+        userId: clerkUser.id,
+        role: "org:admin",
+      })
+
+      if (existingAdmin) {
+        await db.update(User).set({ clerk_user_id: clerkUser.id }).where(eq(User.id, existingAdmin.id))
+      } else {
+        await db.insert(User).values({
+          name: "Demo",
+          last_name: "Admin",
+          email: DEMO_EMAIL,
+          clerk_user_id: clerkUser.id,
+          role: ROLES.admin,
+          status: STATUS.active,
+          tenant_id: existingTenant.id,
+        })
+      }
+      console.log("   ✓ Linked to Clerk.")
+    }
+
     console.log(`   Login: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`)
     process.exit(0)
   }
+
+  // Clerk owns identity/credentials now — create the org + user there first
+  // (outside the DB transaction: a script-level, one-shot operation, and if
+  // the DB half fails afterward it's fine to hand-clean an orphaned demo
+  // Clerk account rather than wrap an external API call in a DB transaction).
+  console.log("🔑 Creating demo Clerk organization + user...")
+  // Slugs are disabled on this Clerk instance (organization_settings.slug_disabled).
+  const clerkOrg = await clerkClient.organizations.createOrganization({
+    name: "Vantory Demo Corp",
+  })
+  const clerkUser = await clerkClient.users.createUser({
+    emailAddress: [DEMO_EMAIL],
+    password: DEMO_PASSWORD,
+    firstName: "Demo",
+    lastName: "Admin",
+  })
+  await clerkClient.organizations.createOrganizationMembership({
+    organizationId: clerkOrg.id,
+    userId: clerkUser.id,
+    role: "org:admin",
+  })
 
   await db.transaction(async (tx) => {
     // 1. Create Demo Tenant
@@ -58,6 +130,7 @@ async function seedDemo() {
         slug: DEMO_TENANT_SLUG,
         plan: "PRO",
         is_demo: true,
+        clerk_org_id: clerkOrg.id,
       })
       .returning()
 
@@ -65,14 +138,13 @@ async function seedDemo() {
 
     // 2. Create Demo Admin User
     console.log("👤 Creating demo admin user...")
-    const hashedPassword = await hashPassword(DEMO_PASSWORD)
     const [adminUser] = await tx
       .insert(User)
       .values({
         name: "Demo",
         last_name: "Admin",
         email: DEMO_EMAIL,
-        password: hashedPassword,
+        clerk_user_id: clerkUser.id,
         role: ROLES.admin,
         status: STATUS.active,
         tenant_id: tenantId,

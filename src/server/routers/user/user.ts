@@ -10,6 +10,7 @@ import { inviteUserProcedure } from "../../controllers/userControllers/invite.ts
 import { resendInvitationProcedure } from "../../controllers/userControllers/resendInvitation.ts"
 import { getPendingInvitationsProcedure } from "../../controllers/userControllers/getPendingInvitations.ts"
 import { revokeInvitationProcedure } from "../../controllers/userControllers/revokeInvitation.ts"
+import { getUserAuditLogProcedure } from "../../controllers/userControllers/getUserAuditLog.ts"
 
 export const userRouter = t.router({
   update: updateUser,
@@ -23,4 +24,5 @@ export const userRouter = t.router({
   resendInvitation: resendInvitationProcedure,
   getPendingInvitations: getPendingInvitationsProcedure,
   revokeInvitation: revokeInvitationProcedure,
+  getAuditLog: getUserAuditLogProcedure,
 })

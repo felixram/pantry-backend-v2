@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server"
 import { clerkClient } from "@clerk/express"
 import { adminMutation } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
+import { UserAudit } from "../../../db/schema/userAudit.ts"
 import { PurchaseOrderAudit } from "../../../db/schema/purchaseOrder_audit_log.ts"
 import { and, eq, count } from "drizzle-orm"
 import { z } from "zod"
@@ -76,7 +77,21 @@ export const hardDeleteUserProcedure = adminMutation
     // addition), let Postgres's own foreign key constraints be the source of
     // truth and translate a violation into a clear message.
     try {
-      await ctx.db.delete(User).where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId)))
+      await ctx.db.transaction(async (tx) => {
+        // Record the reason before the row is gone — targetUserId's FK is
+        // ON DELETE SET NULL, so this survives the delete below with a
+        // snapshot of who was deleted.
+        await tx.insert(UserAudit).values({
+          tenant_id: ctx.tenantId!,
+          actorUserId: ctx.user!.id,
+          targetUserId: userToDelete.id,
+          targetEmail: userToDelete.email,
+          targetName: `${userToDelete.name} ${userToDelete.last_name}`.trim(),
+          targetLocationId: userToDelete.location_id,
+          reason: input.reason,
+        })
+        await tx.delete(User).where(and(eq(User.id, input.userId), eq(User.tenant_id, ctx.tenantId!)))
+      })
     } catch (error) {
       throw handleDbError(error, {
         foreignKeyViolation:

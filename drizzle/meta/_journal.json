@@ -470,6 +470,13 @@
       "when": 1786817049183,
       "tag": "0066_damp_wrecker",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1786891385529,
+      "tag": "0067_chubby_lady_vermin",
+      "breakpoints": true
     }
   ]
 }

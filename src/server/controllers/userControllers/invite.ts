@@ -107,6 +107,10 @@ export const inviteUserProcedure = authedMutation
       inviterUserId: ctx.clerkUserId,
       emailAddress: input.email,
       role: ROLE_TO_ORG_ROLE[input.role]!,
+      // Without this, Clerk's invitation link points at its own hosted
+      // Account Portal, which 404s for a dev instance not set up for it —
+      // route through our own /sign-up page instead (reads __clerk_ticket).
+      redirectUrl: `${process.env.CLERK_APP_URL || "http://localhost:3001"}/sign-up`,
     })
 
     return {

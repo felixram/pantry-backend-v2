@@ -90,6 +90,10 @@ async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
         organizationId: clerkOrgId,
         emailAddress: user.email,
         role,
+        // Without this, the invitation link points at Clerk's hosted Account
+        // Portal, which 404s for a dev instance not set up for it — route
+        // through our own /sign-up page instead (reads __clerk_ticket).
+        redirectUrl: `${process.env.CLERK_APP_URL || "http://localhost:3001"}/sign-up`,
       })
       console.log(`  ✓ Invited ${user.email} (${role})`)
     } catch (err) {

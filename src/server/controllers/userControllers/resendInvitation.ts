@@ -44,6 +44,9 @@ export const resendInvitationProcedure = adminMutation
       inviterUserId: ctx.clerkUserId,
       emailAddress: input.email,
       role: existing.role,
+      // See invite.ts — without this the link 404s against Clerk's hosted
+      // Account Portal instead of routing through our own /sign-up page.
+      redirectUrl: `${process.env.CLERK_APP_URL || "http://localhost:3001"}/sign-up`,
     })
 
     return {

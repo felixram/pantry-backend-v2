@@ -25,6 +25,7 @@ export const getAllPuchaseOrders = authedProcedure
         ORDER_STATUS.pendingApproval,
         ORDER_STATUS.approved,
         ORDER_STATUS.ordered,
+        ORDER_STATUS.partiallyReceived,
         ORDER_STATUS.received,
         ORDER_STATUS.rejected,
         ORDER_STATUS.cancelled,

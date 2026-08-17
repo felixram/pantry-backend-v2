@@ -26,7 +26,12 @@ const validTransitions: Record<string, string[]> = {
     ORDER_STATUS.cancelled,
   ],
   [ORDER_STATUS.approved]: [ORDER_STATUS.ordered, ORDER_STATUS.cancelled],
-  [ORDER_STATUS.ordered]: [ORDER_STATUS.received, ORDER_STATUS.cancelled],
+  [ORDER_STATUS.ordered]: [
+    ORDER_STATUS.received,
+    ORDER_STATUS.partiallyReceived,
+    ORDER_STATUS.cancelled,
+  ],
+  [ORDER_STATUS.partiallyReceived]: [ORDER_STATUS.received, ORDER_STATUS.cancelled],
   [ORDER_STATUS.received]: [], // Terminal state
   [ORDER_STATUS.rejected]: [
     ORDER_STATUS.draft,
@@ -73,9 +78,14 @@ const roleTransitions: Record<string, Record<string, string[]>> = {
     [ROLES.admin]: [ORDER_STATUS.ordered, ORDER_STATUS.cancelled], // ADMIN marks as ordered or cancels
   },
   [ORDER_STATUS.ordered]: {
-    [ROLES.user]: [ORDER_STATUS.received], // USER can mark as received
-    [ROLES.manager]: [ORDER_STATUS.received, ORDER_STATUS.cancelled], // MANAGER can receive or cancel
-    [ROLES.admin]: [ORDER_STATUS.received, ORDER_STATUS.cancelled], // ADMIN can receive or cancel
+    [ROLES.user]: [ORDER_STATUS.received, ORDER_STATUS.partiallyReceived], // USER can mark as received (fully or partially)
+    [ROLES.manager]: [ORDER_STATUS.received, ORDER_STATUS.partiallyReceived, ORDER_STATUS.cancelled], // MANAGER can receive (fully or partially) or cancel
+    [ROLES.admin]: [ORDER_STATUS.received, ORDER_STATUS.partiallyReceived, ORDER_STATUS.cancelled], // ADMIN can receive (fully or partially) or cancel
+  },
+  [ORDER_STATUS.partiallyReceived]: {
+    [ROLES.user]: [ORDER_STATUS.received], // USER can complete receiving
+    [ROLES.manager]: [ORDER_STATUS.received, ORDER_STATUS.cancelled], // MANAGER can complete receiving or cancel the remainder
+    [ROLES.admin]: [ORDER_STATUS.received, ORDER_STATUS.cancelled], // ADMIN can complete receiving or cancel the remainder
   },
   [ORDER_STATUS.received]: {
     [ROLES.user]: [], // Terminal

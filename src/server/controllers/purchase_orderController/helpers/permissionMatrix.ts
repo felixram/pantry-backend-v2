@@ -41,6 +41,9 @@ export type POPermissionAction =
  *   approve/reject it without waiting for PENDING_APPROVAL.
  * - PENDING_APPROVAL: USER locked out, MANAGER/ADMIN can approve/reject
  * - ORDERED: USER can mark as received
+ * - PARTIALLY_RECEIVED: mirrors ORDERED exactly — a PO with progress but not
+ *   full coverage is still an open, actionable order, not a different tier
+ *   of authority
  * - REJECTED: Not terminal for USER - can edit and re-submit
  * - APPROVED is the only status where email_supplier appears, and only for
  *   MANAGER/ADMIN — emailing a supplier only makes sense once spend is
@@ -72,6 +75,11 @@ const PERMISSION_MATRIX: Record<
     [ROLES.admin]: ["view", "mark_ordered", "cancel", "unlock", "email_supplier"],
   },
   [ORDER_STATUS.ordered]: {
+    [ROLES.user]: ["view", "mark_received"],
+    [ROLES.manager]: ["view", "mark_received", "cancel"],
+    [ROLES.admin]: ["view", "mark_received", "cancel"],
+  },
+  [ORDER_STATUS.partiallyReceived]: {
     [ROLES.user]: ["view", "mark_received"],
     [ROLES.manager]: ["view", "mark_received", "cancel"],
     [ROLES.admin]: ["view", "mark_received", "cancel"],

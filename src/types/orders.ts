@@ -3,6 +3,7 @@ export const ORDER_STATUS = {
   pendingApproval: "PENDING_APPROVAL",
   approved: "APPROVED",
   ordered: "ORDERED",
+  partiallyReceived: "PARTIALLY_RECEIVED",
   rejected: "REJECTED",
   cancelled: "CANCELLED",
   received: "RECEIVED",

@@ -143,15 +143,38 @@ export const confirmInvoiceProcedure = adminMutation
         .set(confirmUpdate)
         .where(eq(Invoice.id, input.invoiceId))
 
-      // 3. Check if matched to a PO in ORDERED status
+      // 3. Check if matched to a PO in a receivable status
       let stockSummary: string
 
       if (invoice.matched_purchase_order_id) {
-        const po = await tx.query.PurchaseOrder.findFirst({
-          where: and(eq(PurchaseOrder.id, invoice.matched_purchase_order_id), eq(PurchaseOrder.tenant_id, ctx.tenantId!)),
-        })
+        // Row-locked (not the relational query API, which doesn't support
+        // .for()) — closes the race where two near-simultaneous confirms
+        // (double-click, two tabs, two invoices matched to the same PO)
+        // could both read the PO's pre-write status and both take the
+        // receive path, double-applying stock.
+        const [po] = await tx
+          .select()
+          .from(PurchaseOrder)
+          .where(and(eq(PurchaseOrder.id, invoice.matched_purchase_order_id), eq(PurchaseOrder.tenant_id, ctx.tenantId!)))
+          .for("update")
 
-        if (po && po.status === ORDER_STATUS.ordered && po.destination_location_id) {
+        const isReceivable =
+          po && (po.status === ORDER_STATUS.ordered || po.status === ORDER_STATUS.partiallyReceived)
+
+        // Any other matched-PO status (RECEIVED, CANCELLED, REJECTED, or not
+        // yet ORDERED) must never silently fall through to a direct stock
+        // update — that would double-count stock a PO already received, or
+        // apply stock against a PO nobody agreed was actually placed/still
+        // open. The reviewer has to actively resolve it: unmatch the PO (a
+        // legitimate standalone purchase) or fix the underlying PO status.
+        if (po && !isReceivable) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `This invoice is matched to PO #${po.po_number || po.id.slice(0, 8)}, which is ${po.status}. Unmatch the PO to confirm this invoice as a standalone stock update, or resolve the conflict first.`,
+          })
+        }
+
+        if (po && isReceivable && po.destination_location_id) {
           // Build received items from confirmed invoice items
           // Aggregate qty per PO item, excluding OOS items
           // Also track effective prices (post-discount) per PO item
@@ -181,8 +204,10 @@ export const confirmInvoiceProcedure = adminMutation
             })
           )
 
-          // Use existing receivePurchaseOrder helper
-          stockSummary = await receivePurchaseOrder(
+          // Use existing receivePurchaseOrder helper — itemized mode, since
+          // receivedItems only lists what this invoice actually covers; any
+          // other PO item is left untouched rather than assumed received.
+          const receiveResult = await receivePurchaseOrder(
             tx,
             po.id,
             po.destination_location_id,
@@ -191,6 +216,7 @@ export const confirmInvoiceProcedure = adminMutation
             receivedItems,
             "Invoice confirmation"
           )
+          stockSummary = receiveResult.summary
 
           // Update PO item prices with effective (post-discount) invoice prices
           for (const [poItemId, effectivePrice] of priceByPoItem) {
@@ -200,11 +226,13 @@ export const confirmInvoiceProcedure = adminMutation
               .where(eq(PurchaseOrderItem.id, poItemId))
           }
 
-          // Update PO with status + invoice totals
+          // Update PO with status (computed from actual item coverage — may
+          // be RECEIVED, PARTIALLY_RECEIVED, or unchanged if nothing was
+          // actually received) + invoice totals
           await tx
             .update(PurchaseOrder)
             .set({
-              status: ORDER_STATUS.received,
+              ...(receiveResult.resultStatus ? { status: receiveResult.resultStatus } : {}),
               subtotal: invoice.subtotal ?? null,
               tax_amount: invoice.tax_amount ?? null,
               total: invoice.total ?? null,

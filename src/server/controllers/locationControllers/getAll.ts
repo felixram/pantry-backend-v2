@@ -3,6 +3,7 @@ import { authedProcedure } from "../../trpc.ts";
 import { z } from "zod";
 import { Location } from "../../../db/schema/location.ts";
 import { TRPCError } from "@trpc/server";
+import { getLocationFilter } from "../../../utils/locationFilter.ts";
 
 export const getAllLocationsProcedure = authedProcedure
   .input(
@@ -33,6 +34,11 @@ export const getAllLocationsProcedure = authedProcedure
         )
       : sql`TRUE`;
 
+    // MANAGER/USER only ever see their own location (a single row); ADMIN
+    // sees every location tenant-wide.
+    const scopedLocationId = getLocationFilter(ctx.user, ctx.userLocationId, undefined);
+    const locationScope = scopedLocationId ? eq(Location.id, scopedLocationId) : sql`TRUE`;
+
     // When sorting by status, automatically include inactive locations
     const shouldIncludeInactive = input.includeInactive || !!input.sortByStatus;
 
@@ -51,6 +57,7 @@ export const getAllLocationsProcedure = authedProcedure
         ? isNotNull(Location.deletedAt)  // Show ONLY deleted items
         : isNull(Location.deletedAt),     // Show only non-deleted items
       searchFilters,
+      locationScope,
     );
 
     // Determine order by clause based on sortByStatus

@@ -3,6 +3,7 @@ import { Location } from "../../../db/schema/location.ts";
 import { LocationAudit } from "../../../db/schema/locationAudit.ts";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { getLocationFilter } from "../../../utils/locationFilter.ts";
 
 // No restore-window filtering, unlike getDeletedCategoriesProcedure/etc —
 // locations have no purge cron (see restoreLocationProcedure's comment),
@@ -12,8 +13,15 @@ export const getDeletedLocationsProcedure = authedProcedure.query(async ({ ctx }
     throw new TRPCError({ code: "UNAUTHORIZED", message: "Tenant context required" });
   }
 
+  // MANAGER/USER only see their own (deleted) location; ADMIN sees all.
+  const scopedLocationId = getLocationFilter(ctx.user, ctx.userLocationId, undefined);
+
   const locations = await ctx.db.query.Location.findMany({
-    where: and(eq(Location.tenant_id, ctx.tenantId), isNotNull(Location.deletedAt)),
+    where: and(
+      eq(Location.tenant_id, ctx.tenantId),
+      isNotNull(Location.deletedAt),
+      scopedLocationId ? eq(Location.id, scopedLocationId) : undefined
+    ),
     columns: { id: true, name: true, deletedAt: true },
     orderBy: (location) => [desc(location.deletedAt)],
   });

@@ -1,11 +1,15 @@
 import z from "zod"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { and, eq } from "drizzle-orm"
 import { Location } from "../../../db/schema/location.ts"
 import { TRPCError } from "@trpc/server"
 import { ROLES } from "../../../types/user.ts"
 
-export const updateLocationProcedure = authedMutation
+// adminMutation (elevated role) rather than authedMutation — USER had no
+// restriction coded here at all and could edit any location tenant-wide
+// (name, address, tax defaults, count-reminder config). MANAGER's own
+// existing own-location check below is unaffected by this change.
+export const updateLocationProcedure = adminMutation
   .input(
     z.object({
       id: z.uuid(),

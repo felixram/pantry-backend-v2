@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { Location } from "../../../db/schema/location.ts";
 import { Stock } from "../../../db/schema/stock.ts";
 import { eq, and, count, sum } from "drizzle-orm";
+import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 
 export const getLocationById = authedProcedure
   .input(
@@ -33,6 +34,9 @@ export const getLocationById = authedProcedure
         message: "Location not found",
       });
     }
+
+    // MANAGER/USER can only fetch their own location; ADMIN unrestricted.
+    validateLocationAccess(ctx.user!, ctx.userLocationId, location.id);
 
     // Get stock count
     const [stockCount] = await ctx.db

@@ -1,8 +1,9 @@
 import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
 import { LocationAudit } from "../../../db/schema/locationAudit.ts";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { getLocationFilter } from "../../../utils/locationFilter.ts";
 
 export const getLocationAuditLogProcedure = authedProcedure
   .input(
@@ -16,8 +17,14 @@ export const getLocationAuditLogProcedure = authedProcedure
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Tenant context required" });
     }
 
+    // MANAGER/USER only see audit entries for their own location; ADMIN sees all.
+    const scopedLocationId = getLocationFilter(ctx.user, ctx.userLocationId, undefined);
+
     const logs = await ctx.db.query.LocationAudit.findMany({
-      where: eq(LocationAudit.tenant_id, ctx.tenantId),
+      where: and(
+        eq(LocationAudit.tenant_id, ctx.tenantId),
+        scopedLocationId ? eq(LocationAudit.locationId, scopedLocationId) : undefined
+      ),
       columns: { id: true, locationId: true, locationName: true, action: true, reason: true, createdAt: true },
       with: { user: { columns: { name: true } } },
       orderBy: desc(LocationAudit.createdAt),

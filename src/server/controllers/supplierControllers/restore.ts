@@ -1,12 +1,12 @@
 import z from "zod";
-import { authedMutation } from "../../trpc.ts";
+import { adminMutation } from "../../trpc.ts";
 import { Supplier } from "../../../db/schema/supplier.ts";
 import { SupplierAudit } from "../../../db/schema/supplierAudit.ts";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { SUPPLIER_RESTORE_WINDOW_MS } from "./helpers/purgeExpiredSuppliers.ts";
 
-export const restoreSupplierProcedure = authedMutation
+export const restoreSupplierProcedure = adminMutation
   .input(z.object({ id: z.string() }))
   .mutation(async ({ ctx, input }) => {
     if (!ctx.tenantId) {

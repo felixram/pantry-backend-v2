@@ -1,12 +1,12 @@
 import z from "zod";
-import { authedMutation } from "../../trpc.ts";
+import { adminMutation } from "../../trpc.ts";
 import { Category } from "../../../db/schema/category.ts";
 import { CategoryAudit } from "../../../db/schema/categoryAudit.ts";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { CATEGORY_RESTORE_WINDOW_MS } from "./helpers/purgeExpiredCategories.ts";
 
-export const restoreCategoryProcedure = authedMutation
+export const restoreCategoryProcedure = adminMutation
   .input(z.object({ id: z.string() }))
   .mutation(async ({ ctx, input }) => {
     if (!ctx.tenantId) {

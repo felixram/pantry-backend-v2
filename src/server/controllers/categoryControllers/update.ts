@@ -1,10 +1,10 @@
 import z from "zod"
-import { authedMutation, t } from "../../trpc.ts"
+import { adminMutation, t } from "../../trpc.ts"
 import { Category } from "../../../db/schema/category.ts"
 import { and, eq } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 
-export const updateCategoryProcedure = authedMutation
+export const updateCategoryProcedure = adminMutation
   .input(
     z.object({
       id: z.string(),

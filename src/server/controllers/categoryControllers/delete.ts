@@ -2,10 +2,10 @@ import z from "zod"
 import { and, eq, isNull } from "drizzle-orm"
 import { Category } from "../../../db/schema/category.ts"
 import { CategoryAudit } from "../../../db/schema/categoryAudit.ts"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { TRPCError } from "@trpc/server"
 
-export const deleteCategoryProcedure = authedMutation
+export const deleteCategoryProcedure = adminMutation
   .input(
     z.object({
       id: z.string(),

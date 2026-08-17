@@ -1,10 +1,10 @@
 import { Supplier } from "../../../db/schema/supplier.ts"
 import { and, eq } from "drizzle-orm"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
 
-export const updateSupplierProcedure = authedMutation
+export const updateSupplierProcedure = adminMutation
   .input(
     z.object({
       supplierId: z.string(),

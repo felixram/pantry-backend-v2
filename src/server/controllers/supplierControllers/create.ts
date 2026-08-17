@@ -1,9 +1,12 @@
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { Supplier } from "../../../db/schema/supplier.ts"
 import { TRPCError } from "@trpc/server"
 
-export const createSupplierProcedure = authedMutation
+// adminMutation (elevated role) — suppliers are shared reference data;
+// mutating them moved out of authedMutation so USER can no longer
+// create/edit/delete/restore them, only browse (getAll/getById stay open).
+export const createSupplierProcedure = adminMutation
   .input(
     z.object({
       name: z.string(),

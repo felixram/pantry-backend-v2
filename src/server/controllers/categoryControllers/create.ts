@@ -1,10 +1,13 @@
 import z from "zod"
-import { authedMutation, t } from "../../trpc.ts"
+import { adminMutation, t } from "../../trpc.ts"
 import { Category } from "../../../db/schema/category.ts"
 import { TRPCError } from "@trpc/server"
 import { handleDbError } from "../../../utils/dbErrors.ts"
 
-export const createCategoryProcedure = authedMutation
+// adminMutation (elevated role) — categories are shared reference data;
+// mutating them moved out of authedMutation so USER can no longer
+// create/edit/delete/restore them, only browse (getAll/getById stay open).
+export const createCategoryProcedure = adminMutation
   .input(
     z.object({
       name: z.string(),

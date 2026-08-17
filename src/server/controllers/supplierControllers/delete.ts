@@ -1,11 +1,11 @@
 import { and, eq, isNull } from "drizzle-orm"
 import { Supplier } from "../../../db/schema/supplier.ts"
 import { SupplierAudit } from "../../../db/schema/supplierAudit.ts"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
 
-export const deleteSupplierProcedure = authedMutation
+export const deleteSupplierProcedure = adminMutation
   .input(
     z.object({
       id: z.string(),

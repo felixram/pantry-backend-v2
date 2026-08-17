@@ -29,6 +29,7 @@ export const updatePurchaseOrder = authedMutation
           ORDER_STATUS.pendingApproval,
           ORDER_STATUS.approved,
           ORDER_STATUS.ordered,
+          ORDER_STATUS.partiallyReceived,
           ORDER_STATUS.rejected,
           ORDER_STATUS.cancelled,
           ORDER_STATUS.received,
@@ -146,28 +147,67 @@ export const updatePurchaseOrder = authedMutation
         newValue: string;
       }> = [];
 
+      // Hoisted from its original spot in section 6 — the receiving branch
+      // below needs it before that point now runs.
+      const finalDestinationLocationId =
+        input.destination_location_id !== undefined
+          ? input.destination_location_id
+          : existingOrder.destination_location_id;
+
       // 3. Handle status update
-      if (input.status && input.status !== existingOrder.status) {
+      //
+      // Receiving is identified by the client's intent (status: "RECEIVED"
+      // or an explicit receivedItems list — ReceiveOrderDialog always sends
+      // both), not trusted as the literal outcome: the actual resulting
+      // status (RECEIVED vs PARTIALLY_RECEIVED) depends on real item
+      // coverage across possibly multiple receiving events, computed by
+      // receivePurchaseOrder itself. Everything else (approve/reject/
+      // cancel/etc) is a direct, client-specified transition as before.
+      const isReceivingAction =
+        input.status === ORDER_STATUS.received || input.receivedItems !== undefined;
+
+      let stockUpdateSummary: string | null = null;
+      let receivedResultStatus: "RECEIVED" | "PARTIALLY_RECEIVED" | null = null;
+
+      if (isReceivingAction) {
+        if (!finalDestinationLocationId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "destination_location_id is required to receive a purchase order",
+          });
+        }
+
+        const receiveResult = await receivePurchaseOrder(
+          tx,
+          input.purchaseOrderId,
+          finalDestinationLocationId,
+          ctx.user!.id,
+          ctx.tenantId!,
+          input.receivedItems,
+          input.reason || undefined,
+        );
+        stockUpdateSummary = receiveResult.summary;
+        receivedResultStatus = receiveResult.resultStatus;
+
+        if (receivedResultStatus && receivedResultStatus !== existingOrder.status) {
+          validateRoleStatusTransition(
+            userRole,
+            existingOrder.status,
+            receivedResultStatus
+          );
+
+          changes.push({
+            fieldChanged: "status",
+            oldValue: existingOrder.status,
+            newValue: receivedResultStatus,
+          });
+        }
+      } else if (input.status && input.status !== existingOrder.status) {
         validateRoleStatusTransition(
           userRole,
           existingOrder.status,
           input.status
         );
-
-        // Special validation for RECEIVED status
-        if (input.status === ORDER_STATUS.received) {
-          const locationToCheck =
-            input.destination_location_id ||
-            existingOrder.destination_location_id;
-
-          if (!locationToCheck) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message:
-                "destination_location_id is required to mark order as RECEIVED",
-            });
-          }
-        }
 
         changes.push({
           fieldChanged: "status",
@@ -259,11 +299,13 @@ export const updatePurchaseOrder = authedMutation
       }
 
       // 6. Update the purchase order
-      const finalStatus = input.status !== undefined ? input.status : existingOrder.status;
-      const finalDestinationLocationId =
-        input.destination_location_id !== undefined
-          ? input.destination_location_id
-          : existingOrder.destination_location_id;
+      // finalDestinationLocationId was hoisted above section 3. Status: a
+      // receiving action uses the computed result (or stays unchanged if
+      // nothing was actually received), everything else uses the client's
+      // requested status as before.
+      const finalStatus = isReceivingAction
+        ? (receivedResultStatus ?? existingOrder.status)
+        : (input.status !== undefined ? input.status : existingOrder.status);
       const finalSupplierId =
         input.supplier_id !== undefined ? input.supplier_id : existingOrder.supplier_id;
 
@@ -296,23 +338,6 @@ export const updatePurchaseOrder = authedMutation
             newValue: change.newValue,
             reason: input.reason,
           })),
-        );
-      }
-
-      // 8. If status changed to RECEIVED, update stock
-      let stockUpdateSummary: string | null = null;
-      if (
-        input.status === ORDER_STATUS.received &&
-        finalDestinationLocationId
-      ) {
-        stockUpdateSummary = await receivePurchaseOrder(
-          tx,
-          input.purchaseOrderId,
-          finalDestinationLocationId,
-          ctx.user!.id,
-          ctx.tenantId!,
-          input.receivedItems,
-          input.reason || undefined,
         );
       }
 

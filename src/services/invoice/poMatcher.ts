@@ -1,4 +1,4 @@
-import { eq, and, isNull } from "drizzle-orm"
+import { eq, and, isNull, inArray } from "drizzle-orm"
 import { PurchaseOrder } from "../../db/schema/purchaseOrder.ts"
 import { PurchaseOrderItem } from "../../db/schema/purchaseOrderItem.ts"
 import { Invoice } from "../../db/schema/invoice.ts"
@@ -17,6 +17,7 @@ interface POMatchResult {
     qty: number
     unitPrice: number | null
     unit: string | null
+    received_qty: number | null
   }>
 }
 
@@ -63,6 +64,7 @@ export async function matchPurchaseOrder(
           qty: item.qty,
           unitPrice: item.unit_price,
           unit: item.unit,
+          received_qty: item.received_qty,
         })),
       }
     }
@@ -94,33 +96,37 @@ export async function matchPurchaseOrder(
           qty: item.qty,
           unitPrice: item.unit_price,
           unit: item.unit,
+          received_qty: item.received_qty,
         })),
       }
     }
   }
 
-  // 2. Supplier-scoped ORDERED POs, then fallback to all ORDERED POs
+  // 2. Supplier-scoped open POs (ORDERED or PARTIALLY_RECEIVED — a follow-up
+  // invoice against an already-partial PO must still be matchable), then
+  // fallback to all open POs
   const validProductIds = matchedProductIds.filter((id): id is string => id !== null)
+  const openStatuses = [ORDER_STATUS.ordered, ORDER_STATUS.partiallyReceived]
 
-  // Build candidate list: supplier-scoped first, then all ORDERED POs as fallback
+  // Build candidate list: supplier-scoped first, then all open POs as fallback
   let candidatePOs = matchedSupplierId
     ? await db.query.PurchaseOrder.findMany({
         where: and(
           eq(PurchaseOrder.supplier_id, matchedSupplierId),
           eq(PurchaseOrder.tenant_id, tenantId),
-          eq(PurchaseOrder.status, ORDER_STATUS.ordered),
+          inArray(PurchaseOrder.status, openStatuses),
           isNull(PurchaseOrder.deletedAt)
         ),
         with: { purchaseOrderItems: true },
       })
     : []
 
-  // If no supplier-scoped candidates, search all ORDERED POs for product overlap
+  // If no supplier-scoped candidates, search all open POs for product overlap
   if (candidatePOs.length === 0 && validProductIds.length > 0) {
     candidatePOs = await db.query.PurchaseOrder.findMany({
       where: and(
         eq(PurchaseOrder.tenant_id, tenantId),
-        eq(PurchaseOrder.status, ORDER_STATUS.ordered),
+        inArray(PurchaseOrder.status, openStatuses),
         isNull(PurchaseOrder.deletedAt)
       ),
       with: { purchaseOrderItems: true },
@@ -158,6 +164,7 @@ export async function matchPurchaseOrder(
         qty: item.qty,
         unitPrice: item.unit_price,
         unit: item.unit,
+        received_qty: item.received_qty,
       })),
     }
   }
@@ -194,7 +201,7 @@ export interface ItemDiscrepancyResult {
  */
 export function calculateItemDiscrepancies(
   items: InvoiceLineForMatching[],
-  poItems: Array<{ poItemId: string; productId: string; qty: number; unitPrice: number | null }>
+  poItems: Array<{ poItemId: string; productId: string; qty: number; unitPrice: number | null; received_qty?: number | null }>
 ): ItemDiscrepancyResult[] {
   const poItemsByProduct = new Map(
     poItems.map((item) => [item.productId, item])
@@ -244,7 +251,13 @@ export function calculateItemDiscrepancies(
 
     if (!item.isOOS && !alreadyAssigned) {
       const totalInvoiceQty = receivableQtyByPoItem.get(matchedPoItem.poItemId) ?? item.qty
-      const qtyDiff = totalInvoiceQty - matchedPoItem.qty
+      // Compare against what's still outstanding, not the item's full
+      // original qty — once a prior invoice/receive has already covered
+      // part of a PO item, a follow-up invoice correctly covering what's
+      // left shouldn't be flagged as a quantity mismatch against the whole
+      // order.
+      const outstandingQty = matchedPoItem.qty - (matchedPoItem.received_qty ?? 0)
+      const qtyDiff = totalInvoiceQty - outstandingQty
       hasQtyDiscrepancy = Math.abs(qtyDiff) > 0.01
       qtyDiscrepancyAmount = qtyDiff
       qtyDiscrepancyAssigned.add(matchedPoItem.poItemId)
@@ -310,6 +323,7 @@ export async function recalculateInvoiceDiscrepancies(
     productId: item.product_id,
     qty: item.qty,
     unitPrice: item.unit_price,
+    received_qty: item.received_qty,
   }))
 
   const linesForMatching: InvoiceLineForMatching[] = invoice.items.map((item) => ({

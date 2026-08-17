@@ -32,6 +32,7 @@ export const checkExistingPO = authedProcedure
         ne(PurchaseOrder.status, ORDER_STATUS.cancelled),
         ne(PurchaseOrder.status, ORDER_STATUS.rejected),
         ne(PurchaseOrder.status, ORDER_STATUS.ordered),
+        ne(PurchaseOrder.status, ORDER_STATUS.partiallyReceived),
         ne(PurchaseOrder.status, ORDER_STATUS.received),
         isNull(PurchaseOrder.deletedAt),
       ),

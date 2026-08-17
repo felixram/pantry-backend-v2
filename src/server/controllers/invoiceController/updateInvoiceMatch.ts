@@ -114,6 +114,7 @@ async function rematchItemsToPO(
     productId: item.product_id,
     qty: item.qty,
     unitPrice: item.unit_price,
+    received_qty: item.received_qty,
   }))
 
   // Normalize DB invoice items into the shared format

@@ -84,6 +84,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
       .set({
         extracted_data: extracted,
         extraction_confidence: extracted.confidence,
+        invoice_number: extracted.invoice_number ?? null,
         subtotal: extracted.subtotal ?? null,
         tax_amount: extracted.tax ?? null,
         total: extracted.total ?? null,

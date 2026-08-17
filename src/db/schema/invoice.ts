@@ -26,6 +26,7 @@ export const Invoice = pgTable(
     original_file_url: text("original_file_url"),
     original_file_name: text("original_file_name"),
     original_file_type: text("original_file_type"),
+    invoice_number: text("invoice_number"),
     extracted_data: jsonb("extracted_data"),
     extraction_confidence: real("extraction_confidence"),
     matched_supplier_id: uuid("matched_supplier_id").references(() => Supplier.id),
@@ -51,6 +52,7 @@ export const Invoice = pgTable(
     index().on(t.status),
     index().on(t.matched_supplier_id),
     index().on(t.matched_purchase_order_id),
+    index().on(t.invoice_number),
     uniqueIndex("invoice_tenant_email_id_unique")
       .on(t.tenant_id, t.resend_email_id),
     index().on(t.deletedAt),

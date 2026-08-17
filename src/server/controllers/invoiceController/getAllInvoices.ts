@@ -49,6 +49,7 @@ export const getAllInvoicesProcedure = authedProcedure
           ilike(Invoice.from_email, searchPattern),
           ilike(Invoice.subject, searchPattern),
           ilike(Invoice.original_file_name, searchPattern),
+          ilike(Invoice.invoice_number, searchPattern),
         )!
       )
     }
@@ -61,6 +62,7 @@ export const getAllInvoicesProcedure = authedProcedure
         subject: Invoice.subject,
         received_at: Invoice.received_at,
         original_file_name: Invoice.original_file_name,
+        invoice_number: Invoice.invoice_number,
         extraction_confidence: Invoice.extraction_confidence,
         matched_supplier_id: Invoice.matched_supplier_id,
         matched_purchase_order_id: Invoice.matched_purchase_order_id,

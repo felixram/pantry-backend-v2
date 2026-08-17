@@ -48,6 +48,14 @@ invoiceUploadRouter.post("/upload", upload.array("files", 10), async (req, res) 
     const locationId = req.body?.location_id || userLocationId || null
     const purchaseOrderId = req.body?.purchase_order_id || null
 
+    // Confirming an invoice with no location fails outright unless it's
+    // matched to an ORDERED PO (see confirmInvoice.ts's updateStockDirectly
+    // fallback, which has no tenant-wide default to fall back on) — so a
+    // location must be resolved at upload time, not left to fail later.
+    if (!locationId) {
+      return res.status(400).json({ error: "Location is required to upload an invoice." })
+    }
+
     const invoiceIds: string[] = []
 
     for (const file of files) {

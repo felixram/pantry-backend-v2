@@ -26,9 +26,10 @@ export const getAllUsersProcedure = authedProcedure
       })
     }
 
-    // MANAGER can only see users at their location
+    // MANAGER and USER can only see users at their own location; ADMIN can
+    // pass an arbitrary filter (or none) to see the whole tenant.
     const effectiveLocationId =
-      ctx.user!.role === ROLES.manager
+      ctx.user!.role === ROLES.manager || ctx.user!.role === ROLES.user
         ? ctx.userLocationId
         : input.location_id
 

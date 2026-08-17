@@ -24,7 +24,12 @@
  * be set to the production frontend domain — invitation links otherwise
  * point at localhost.
  *
- * Run with: npx tsx scripts/migrateToClerk.ts
+ * Optionally scope to one real tenant via TENANT_SLUG — the production DB
+ * has real customer tenants mixed in with test/staging ones (only is_demo
+ * is tracked, and most test tenants aren't flagged that way), so a blind
+ * run would email real invitations to test-tenant users too.
+ *
+ * Run with: TENANT_SLUG=akimori npx tsx scripts/migrateToClerk.ts
  */
 
 import "dotenv/config"
@@ -32,7 +37,7 @@ import { clerkClient } from "@clerk/express"
 import { db } from "../src/db/index.ts"
 import { Tenant } from "../src/db/schema/tenant.ts"
 import { User } from "../src/db/schema/users.ts"
-import { toClerkOrgRole } from "../src/types/user.ts"
+import { STATUS, toClerkOrgRole } from "../src/types/user.ts"
 import { and, eq, isNull } from "drizzle-orm"
 
 async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
@@ -54,7 +59,7 @@ async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
   const users = await db
     .select()
     .from(User)
-    .where(and(eq(User.tenant_id, tenant.id), isNull(User.deletedAt)))
+    .where(and(eq(User.tenant_id, tenant.id), eq(User.status, STATUS.active), isNull(User.deletedAt)))
 
   for (const user of users) {
     if (user.clerk_user_id) {
@@ -86,10 +91,19 @@ async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
 async function migrateToClerk() {
   console.log("🔑 Starting Clerk migration...")
 
+  const tenantSlug = process.env.TENANT_SLUG
   const tenants = await db
     .select()
     .from(Tenant)
-    .where(and(eq(Tenant.is_demo, false), isNull(Tenant.deletedAt)))
+    .where(
+      tenantSlug
+        ? and(eq(Tenant.slug, tenantSlug), isNull(Tenant.deletedAt))
+        : and(eq(Tenant.is_demo, false), isNull(Tenant.deletedAt))
+    )
+
+  if (tenantSlug && tenants.length === 0) {
+    throw new Error(`No tenant found with slug "${tenantSlug}"`)
+  }
 
   for (const tenant of tenants) {
     try {

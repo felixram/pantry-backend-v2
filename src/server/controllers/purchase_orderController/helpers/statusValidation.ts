@@ -41,17 +41,20 @@ const validTransitions: Record<string, string[]> = {
  *
  * Key differences from base transitions:
  * - USER can transition DRAFT -> PENDING_APPROVAL (submit)
- * - ADMIN can transition PENDING_APPROVAL -> APPROVED/REJECTED
- * - ADMIN can transition APPROVED -> ORDERED
+ * - MANAGER/ADMIN can both transition DRAFT -> APPROVED/REJECTED directly
+ *   (fast-track) — ADMIN's authority is a strict superset of MANAGER's at
+ *   every status, so it can't be weaker here than MANAGER's
+ * - MANAGER/ADMIN can transition PENDING_APPROVAL -> APPROVED/REJECTED
+ * - MANAGER/ADMIN can transition APPROVED -> ORDERED
  * - USER can transition ORDERED -> RECEIVED (mark as received)
- * - ADMIN can transition ORDERED -> RECEIVED or CANCELLED
+ * - MANAGER/ADMIN can transition ORDERED -> RECEIVED or CANCELLED
  * - USER can transition REJECTED -> DRAFT or PENDING_APPROVAL (fix & re-submit)
  */
 const roleTransitions: Record<string, Record<string, string[]>> = {
   [ORDER_STATUS.draft]: {
     [ROLES.user]: [ORDER_STATUS.pendingApproval], // USER submits for approval
     [ROLES.manager]: [ORDER_STATUS.approved, ORDER_STATUS.rejected], // MANAGER can approve/reject drafts directly
-    [ROLES.admin]: [], // ADMIN can only view drafts
+    [ROLES.admin]: [ORDER_STATUS.approved, ORDER_STATUS.rejected], // ADMIN can approve/reject drafts directly too
   },
   [ORDER_STATUS.pendingApproval]: {
     [ROLES.user]: [], // USER cannot transition (locked)

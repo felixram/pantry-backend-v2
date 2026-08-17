@@ -26,13 +26,19 @@ export type POPermissionAction =
  * Permission Matrix
  * Defines which actions each role can perform in each status
  *
- * New Permission Model:
- * - USER (Employee) owns Draft/Rejected POs
- * - ADMIN (Manager) handles approvals and workflow progression
+ * Permission Model:
+ * - USER (Employee) owns Draft/Rejected POs — can originate a request but
+ *   not authorize spend (a USER-created PO starts in DRAFT; an elevated-role
+ *   PO starts APPROVED).
+ * - MANAGER/ADMIN both handle approvals and workflow progression. ADMIN's
+ *   authority is a strict superset of MANAGER's at every status, including
+ *   DRAFT (both can edit a draft directly and approve/reject it) — there is
+ *   no status where ADMIN has less authority than MANAGER.
  *
- * Key Changes:
- * - DRAFT: USER owns, ADMIN view-only
- * - PENDING_APPROVAL: USER locked out, ADMIN can approve/reject
+ * Key facts:
+ * - DRAFT: USER owns; MANAGER/ADMIN can edit the draft directly and
+ *   approve/reject it without waiting for PENDING_APPROVAL.
+ * - PENDING_APPROVAL: USER locked out, MANAGER/ADMIN can approve/reject
  * - ORDERED: USER can mark as received
  * - REJECTED: Not terminal for USER - can edit and re-submit
  */
@@ -48,8 +54,8 @@ const PERMISSION_MATRIX: Record<
       "delete",
       "submit_for_approval",
     ],
-    [ROLES.manager]: ["view", "approve", "reject"],
-    [ROLES.admin]: ["view"],
+    [ROLES.manager]: ["view", "edit_header", "edit_items", "approve", "reject"],
+    [ROLES.admin]: ["view", "edit_header", "edit_items", "approve", "reject"],
   },
   [ORDER_STATUS.pendingApproval]: {
     [ROLES.user]: ["view"],

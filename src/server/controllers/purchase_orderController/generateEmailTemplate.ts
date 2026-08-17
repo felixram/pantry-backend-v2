@@ -4,6 +4,8 @@ import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { and, eq } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
+import { validatePermission } from "./helpers/permissionMatrix.ts";
+import type { userRoles } from "../../../types/user.ts";
 import {
   calculateLineTotal,
   calculateSubtotal,
@@ -66,6 +68,8 @@ export const generateEmailTemplate = authedProcedure
     if (purchaseOrder.destination_location_id) {
       validateLocationAccess(ctx.user!, ctx.userLocationId, purchaseOrder.destination_location_id);
     }
+
+    validatePermission(ctx.user!.role as userRoles, purchaseOrder.status, "email_supplier");
 
     // Calculate total
     const total = calculateSubtotal(purchaseOrder.purchaseOrderItems);

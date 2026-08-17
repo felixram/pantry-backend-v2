@@ -20,7 +20,8 @@ export type POPermissionAction =
   | "move_to_draft"
   | "resubmit"
   | "unlock"
-  | "lock";
+  | "lock"
+  | "email_supplier";
 
 /**
  * Permission Matrix
@@ -41,6 +42,9 @@ export type POPermissionAction =
  * - PENDING_APPROVAL: USER locked out, MANAGER/ADMIN can approve/reject
  * - ORDERED: USER can mark as received
  * - REJECTED: Not terminal for USER - can edit and re-submit
+ * - APPROVED is the only status where email_supplier appears, and only for
+ *   MANAGER/ADMIN — emailing a supplier only makes sense once spend is
+ *   authorized, and a regular USER never authorizes spend.
  */
 const PERMISSION_MATRIX: Record<
   string,
@@ -64,8 +68,8 @@ const PERMISSION_MATRIX: Record<
   },
   [ORDER_STATUS.approved]: {
     [ROLES.user]: ["view"],
-    [ROLES.manager]: ["view", "mark_ordered", "cancel", "unlock"],
-    [ROLES.admin]: ["view", "mark_ordered", "cancel", "unlock"],
+    [ROLES.manager]: ["view", "mark_ordered", "cancel", "unlock", "email_supplier"],
+    [ROLES.admin]: ["view", "mark_ordered", "cancel", "unlock", "email_supplier"],
   },
   [ORDER_STATUS.ordered]: {
     [ROLES.user]: ["view", "mark_received"],
@@ -151,6 +155,7 @@ export function validatePermission(
       resubmit: `You cannot resubmit from ${status} status`,
       unlock: `You cannot unlock a purchase order in ${status} status`,
       lock: `You cannot lock a purchase order in ${status} status`,
+      email_supplier: `You cannot email the supplier for a purchase order in ${status} status`,
     };
 
     throw new TRPCError({

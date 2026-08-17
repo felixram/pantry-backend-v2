@@ -37,10 +37,18 @@ export interface ReceivedItemQuantity {
  * @param destinationLocationId - Location where stock should be received
  * @param userId - ID of user receiving the order
  * @param tenantId - ID of the tenant for data isolation
- * @param receivedItems - Optional array of items with actual received quantities
- *                        If not provided, uses the expected qty from each item
+ * @param receivedItems - Items with actual received quantities. When omitted
+ *                        entirely, every PO item defaults to its full
+ *                        expected qty (the "receive everything" convenience
+ *                        mode). When provided — even as an empty array — it
+ *                        is treated as the complete, itemized list: any PO
+ *                        item NOT included is left untouched (not defaulted
+ *                        to its full qty). This is what makes it safe to
+ *                        call from invoice confirmation with only the items
+ *                        that invoice actually covers, without silently
+ *                        completing the rest of the PO.
  * @param discrepancyReason - Optional reason for any quantity discrepancies
- * @returns Summary of stock updates
+ * @returns Summary of stock updates and the PO's resulting status
  */
 export async function receivePurchaseOrder(
   tx: TransactionContext,
@@ -50,7 +58,11 @@ export async function receivePurchaseOrder(
   tenantId: string,
   receivedItems?: ReceivedItemQuantity[],
   discrepancyReason?: string
-): Promise<string> {
+): Promise<{ summary: string; resultStatus: "RECEIVED" | "PARTIALLY_RECEIVED" | null }> {
+  // Itemized mode: caller passed an explicit (possibly empty) list, so only
+  // those items should move — see the receivedItems doc comment above.
+  const isItemizedList = receivedItems !== undefined;
+
   // 1. Get all items in the purchase order
   const orderItems = await tx.query.PurchaseOrderItem.findMany({
     where: and(eq(PurchaseOrderItem.purchase_order_id, purchaseOrderId), isNull(PurchaseOrderItem.deletedAt)),
@@ -60,7 +72,7 @@ export async function receivePurchaseOrder(
   });
 
   if (orderItems.length === 0) {
-    return "No items to receive";
+    return { summary: "No items to receive", resultStatus: null };
   }
 
   // Create a map for received quantities if provided
@@ -112,8 +124,16 @@ export async function receivePurchaseOrder(
 
   // 3. Process each item
   for (const item of orderItems) {
-    // Get the received quantity (either from receivedItems or use expected qty)
     const receivedItemData = receivedQtyMap.get(item.id);
+
+    // Itemized mode: an item this batch doesn't mention is untouched — not
+    // defaulted to its full qty. Without this, confirming an invoice that
+    // only covers 1 of a PO's 3 items would silently mark all 3 as fully
+    // received.
+    if (isItemizedList && !receivedItemData) continue;
+
+    // Get the received quantity (either from receivedItems or, in
+    // non-itemized "receive everything" mode, the expected qty)
     const actualReceivedQty = receivedItemData?.receivedQty ?? item.qty;
     const itemNotes = receivedItemData?.notes;
 
@@ -126,23 +146,34 @@ export async function receivePurchaseOrder(
       item.unit_conversion_factor ?? tryGetFactor(productConversions, item.unit) ?? 1;
     const baseQtyToAdd = actualReceivedQty * conversionFactor;
 
+    // Compare against what was still outstanding before this event, not the
+    // item's full original qty — once partial receiving is normal, a
+    // deliberate partial delivery isn't a "discrepancy" against the whole
+    // order, only against what this batch was actually expected to cover.
+    const priorReceivedQty = item.received_qty ?? 0;
+    const outstandingQty = item.qty - priorReceivedQty;
+
     // Track discrepancies
-    if (actualReceivedQty !== item.qty) {
+    if (actualReceivedQty !== outstandingQty) {
       discrepancies.push({
         itemId: item.id,
         productId: item.product_id,
         productName: item.product?.name || "Unknown Product",
-        expectedQty: item.qty,
+        expectedQty: outstandingQty,
         receivedQty: actualReceivedQty,
         notes: itemNotes,
       });
     }
 
-    // Update the item with received quantity and notes
+    // Update the item with received quantity and notes — accumulated, not
+    // overwritten, so a second partial receive against the same item
+    // doesn't lose track of the first one's progress (Stock's own qty write
+    // below was already correctly incremental; this column just hadn't
+    // matched that).
     await tx
       .update(PurchaseOrderItem)
       .set({
-        received_qty: actualReceivedQty,
+        received_qty: sql`COALESCE(${PurchaseOrderItem.received_qty}, 0) + ${actualReceivedQty}`,
         received_notes: itemNotes || null,
       })
       .where(eq(PurchaseOrderItem.id, item.id));
@@ -184,8 +215,8 @@ export async function receivePurchaseOrder(
       const conversionInfo = conversionFactor > 1
         ? ` (${actualReceivedQty} ${item.unit} × ${conversionFactor} = ${baseQtyToAdd} base units)`
         : "";
-      const reasonSuffix = actualReceivedQty !== item.qty
-        ? ` (expected: ${item.qty}, received: ${actualReceivedQty})`
+      const reasonSuffix = actualReceivedQty !== outstandingQty
+        ? ` (expected: ${outstandingQty}, received: ${actualReceivedQty})`
         : "";
       await tx.insert(StockMovement).values({
         product_id: item.product_id,
@@ -224,9 +255,27 @@ export async function receivePurchaseOrder(
     });
   }
 
+  // 5. Compute the PO's resulting status from real coverage, not from what
+  // the caller asked for — re-read every item's post-write received_qty
+  // against its ordered qty. Only meaningful if this batch actually moved
+  // something (stockUpdates empty means every entered qty was 0 — no real
+  // progress, so the PO's status shouldn't change).
+  let resultStatus: "RECEIVED" | "PARTIALLY_RECEIVED" | null = null;
+  if (stockUpdates.length > 0) {
+    const finalItems = await tx.query.PurchaseOrderItem.findMany({
+      where: and(eq(PurchaseOrderItem.purchase_order_id, purchaseOrderId), isNull(PurchaseOrderItem.deletedAt)),
+      columns: { qty: true, received_qty: true },
+    });
+    const allCovered = finalItems.every((i) => (i.received_qty ?? 0) >= i.qty);
+    resultStatus = allCovered ? "RECEIVED" : "PARTIALLY_RECEIVED";
+  }
+
   // Return summary
   const discrepancySummary = discrepancies.length > 0
     ? `, ${discrepancies.length} items with quantity discrepancies`
     : "";
-  return `Received ${orderItems.length} items, updated ${stockUpdates.length} stock records${discrepancySummary}`;
+  return {
+    summary: `Received ${orderItems.length} items, updated ${stockUpdates.length} stock records${discrepancySummary}`,
+    resultStatus,
+  };
 }

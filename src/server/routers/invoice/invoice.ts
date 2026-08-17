@@ -15,6 +15,7 @@ import {
   getSupplierAccuracyProcedure,
   updateInvoiceMatchProcedure,
   suggestOpenPOProcedure,
+  checkDuplicateInvoiceNumberProcedure,
 } from "../../controllers/invoiceController/index.ts"
 
 import { t } from "../../trpc.ts"
@@ -36,4 +37,5 @@ export const invoiceRouter = t.router({
   getSupplierAccuracy: getSupplierAccuracyProcedure,
   updateMatch: updateInvoiceMatchProcedure,
   suggestOpenPO: suggestOpenPOProcedure,
+  checkDuplicates: checkDuplicateInvoiceNumberProcedure,
 })

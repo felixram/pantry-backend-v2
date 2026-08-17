@@ -14,6 +14,7 @@ import {
   matchItemTaxRateProcedure,
   getSupplierAccuracyProcedure,
   updateInvoiceMatchProcedure,
+  suggestOpenPOProcedure,
 } from "../../controllers/invoiceController/index.ts"
 
 import { t } from "../../trpc.ts"
@@ -34,4 +35,5 @@ export const invoiceRouter = t.router({
   matchItemTaxRate: matchItemTaxRateProcedure,
   getSupplierAccuracy: getSupplierAccuracyProcedure,
   updateMatch: updateInvoiceMatchProcedure,
+  suggestOpenPO: suggestOpenPOProcedure,
 })

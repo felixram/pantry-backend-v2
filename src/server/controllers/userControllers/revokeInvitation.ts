@@ -9,6 +9,14 @@ function invitationLocationId(publicMetadata: unknown): string | null {
   return typeof locationId === "string" ? locationId : null
 }
 
+// Clerk only carries a coarse admin/member role (see toClerkOrgRole in
+// types/user.ts) — the real ADMIN/MANAGER/USER role travels in
+// publicMetadata instead, same as location_id above.
+function invitationAppRole(publicMetadata: unknown): string | null {
+  const role = (publicMetadata as Record<string, unknown> | undefined)?.app_role
+  return typeof role === "string" ? role : null
+}
+
 /**
  * Cancel a pending Clerk org invitation (typo'd email, changed mind, etc).
  * No local row to clean up — pending invites only ever live in Clerk.
@@ -37,7 +45,7 @@ export const revokeInvitationProcedure = adminMutation
 
       if (
         !target ||
-        target.role !== "org:member" ||
+        invitationAppRole(target.publicMetadata) !== ROLES.user ||
         invitationLocationId(target.publicMetadata) !== ctx.userLocationId
       ) {
         throw new TRPCError({

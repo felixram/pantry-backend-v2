@@ -32,14 +32,8 @@ import { clerkClient } from "@clerk/express"
 import { db } from "../src/db/index.ts"
 import { Tenant } from "../src/db/schema/tenant.ts"
 import { User } from "../src/db/schema/users.ts"
-import { ROLES } from "../src/types/user.ts"
+import { toClerkOrgRole } from "../src/types/user.ts"
 import { and, eq, isNull } from "drizzle-orm"
-
-const ROLE_TO_ORG_ROLE: Record<string, string> = {
-  [ROLES.admin]: "org:admin",
-  [ROLES.manager]: "org:manager",
-  [ROLES.user]: "org:member",
-}
 
 async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
   let clerkOrgId = tenant.clerk_org_id
@@ -68,23 +62,21 @@ async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
       continue
     }
 
-    const role = ROLE_TO_ORG_ROLE[user.role]
-    if (!role) {
-      console.warn(`  ! ${user.email} — unrecognized role "${user.role}", skipping`)
-      continue
-    }
-
     try {
       await clerkClient.organizations.createOrganizationInvitation({
         organizationId: clerkOrgId,
         emailAddress: user.email,
-        role,
+        role: toClerkOrgRole(user.role),
+        // Clerk only tracks the coarse admin/member role above — the real
+        // ADMIN/MANAGER/USER role rides in publicMetadata instead, same as
+        // invite.ts, and is read back by clerkWebhookHandler.ts on accept.
+        publicMetadata: { app_role: user.role },
         // Without this, the invitation link points at Clerk's hosted Account
         // Portal, which 404s for a dev instance not set up for it — route
         // through our own /sign-up page instead (reads __clerk_ticket).
         redirectUrl: `${process.env.CLERK_APP_URL || "http://localhost:3001"}/sign-up`,
       })
-      console.log(`  ✓ Invited ${user.email} (${role})`)
+      console.log(`  ✓ Invited ${user.email} (${user.role})`)
     } catch (err) {
       console.warn(`  ! ${user.email} — invitation failed (likely already pending): ${(err as Error).message}`)
     }

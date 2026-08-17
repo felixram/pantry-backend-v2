@@ -4,13 +4,7 @@ import { adminMutation } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
 import { and, eq } from "drizzle-orm"
 import { z } from "zod"
-import { ROLES, STATUS } from "../../../types/user.ts"
-
-const ROLE_TO_ORG_ROLE: Record<string, string> = {
-  [ROLES.admin]: "org:admin",
-  [ROLES.manager]: "org:manager",
-  [ROLES.user]: "org:member",
-}
+import { ROLES, STATUS, toClerkOrgRole } from "../../../types/user.ts"
 
 export const reactivateUserProcedure = adminMutation
   .input(z.object({ userId: z.string() }))
@@ -57,7 +51,7 @@ export const reactivateUserProcedure = adminMutation
       await clerkClient.organizations.createOrganizationMembership({
         organizationId: ctx.clerkOrgId,
         userId: deletedUser.clerk_user_id,
-        role: ROLE_TO_ORG_ROLE[deletedUser.role] ?? "org:member",
+        role: toClerkOrgRole(deletedUser.role),
       })
     }
 

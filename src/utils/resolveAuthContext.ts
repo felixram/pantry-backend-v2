@@ -4,15 +4,9 @@ import { and, eq, isNull, type SQL } from "drizzle-orm"
 import { db } from "../db/index.ts"
 import { User } from "../db/schema/users.ts"
 import { Tenant } from "../db/schema/tenant.ts"
-import { ROLES, STATUS } from "../types/user.ts"
+import { STATUS } from "../types/user.ts"
 import { verifyToken } from "./tokenUtils.ts"
 import type { jwtTypes } from "../types/jwtTypes.ts"
-
-const ORG_ROLE_TO_ROLE: Record<string, string> = {
-  "org:admin": ROLES.admin,
-  "org:manager": ROLES.manager,
-  "org:member": ROLES.user,
-}
 
 export interface ResolvedAuthContext {
   user: jwtTypes | null
@@ -76,29 +70,28 @@ async function loadUserContext(where: SQL): Promise<LocalUserContext> {
  * duplicated this resolution against the old JWT cookie independently.
  *
  * Two independent auth mechanisms feed into this, tried in order:
- *  1. Clerk session (normal account login) — role sourced live from the
- *     session's org role claim, so a role change via Clerk takes effect
- *     immediately rather than waiting on webhook sync.
+ *  1. Clerk session (normal account login) — Clerk only tracks a coarse
+ *     admin/member org role (see toClerkOrgRole in types/user.ts — a third
+ *     custom role costs extra on Clerk's pricing), so the real ADMIN/
+ *     MANAGER/USER role is read from the local User.role mirror instead of
+ *     the session claim. That mirror is authoritative and written directly
+ *     by adminUpdate.ts / on first invitation acceptance
+ *     (clerkWebhookHandler.ts), not resynced from Clerk after the fact.
  *  2. The inventory-count magic-link session cookie (`count_session`) — a
  *     narrow, Clerk-independent flow for staff without a real account (see
- *     authControllers/validateMagicLink.ts). Role here comes from the local
- *     mirror column since there's no Clerk claim to read it from.
+ *     authControllers/validateMagicLink.ts). Role here comes from the same
+ *     local mirror column since there's no Clerk claim to read it from.
  */
 export async function resolveAuthContext(req: Request): Promise<ResolvedAuthContext> {
-  const { userId, orgId, orgRole } = getAuth(req)
-  if (userId && orgId && orgRole) {
-    const role = ORG_ROLE_TO_ROLE[orgRole]
-    if (!role) return EMPTY_AUTH_CONTEXT
-
+  const { userId, orgId } = getAuth(req)
+  if (userId && orgId) {
     const local = await loadUserContext(
       and(eq(User.clerk_user_id, userId), eq(Tenant.clerk_org_id, orgId))!
     )
     if (!local.user) return EMPTY_AUTH_CONTEXT
 
-    // role comes from the live Clerk claim, not the DB mirror `loadUserContext` read.
     return {
       ...local,
-      user: { id: local.user.id, role },
       clerkUserId: userId,
       clerkOrgId: orgId,
     }

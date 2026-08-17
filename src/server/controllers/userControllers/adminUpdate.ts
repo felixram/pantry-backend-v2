@@ -1,23 +1,16 @@
 import { z } from "zod"
 import { clerkClient } from "@clerk/express"
-import { ROLES, STATUS, isLocationScoped } from "../../../types/user.ts"
+import { ROLES, STATUS, isLocationScoped, toClerkOrgRole } from "../../../types/user.ts"
 import { adminMutation } from "../../trpc.ts"
 import { User } from "../../../db/schema/users.ts"
 import { and, eq } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 
-const ROLE_TO_ORG_ROLE: Record<string, string> = {
-  [ROLES.admin]: "org:admin",
-  [ROLES.manager]: "org:manager",
-  [ROLES.user]: "org:member",
-}
-
 // Admin/manager updates to another user's role/status/location. Credentials
-// are Clerk's job now (no more password field). Role changes go through
-// Clerk's org membership first (source of truth) — the local `role` mirror
-// column is left for the organizationMembership.updated webhook to resync
-// rather than being written here directly, so it can never drift from what
-// Clerk actually granted.
+// are Clerk's job now (no more password field). The local `role` column is
+// authoritative (see resolveAuthContext.ts) and is written directly below;
+// Clerk only gets a coarse admin/member update alongside it (toClerkOrgRole)
+// for its own dashboard bookkeeping — a third custom role there costs extra.
 export const adminUpdateProcedure = adminMutation
   .input(
     z.object({
@@ -124,10 +117,9 @@ export const adminUpdateProcedure = adminMutation
       await clerkClient.organizations.updateOrganizationMembership({
         organizationId: ctx.clerkOrgId,
         userId: existingUser.clerk_user_id,
-        role: ROLE_TO_ORG_ROLE[input.role]!,
+        role: toClerkOrgRole(input.role),
       })
-      // role itself is intentionally left off updateData — the
-      // organizationMembership.updated webhook resyncs the local mirror.
+      updateData.role = input.role
     }
 
     const [updatedUser] = await ctx.db

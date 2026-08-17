@@ -8,36 +8,48 @@ import { Tenant } from "../../db/schema/tenant.ts"
 import { ROLES, STATUS } from "../../types/user.ts"
 import { logger } from "../../utils/logger.ts"
 
-const ORG_ROLE_TO_ROLE: Record<string, string> = {
-  "org:admin": ROLES.admin,
-  "org:manager": ROLES.manager,
-  "org:member": ROLES.user,
-}
-
 /**
- * Recovers the location_id an invite.ts caller attached to the invitation's
- * publicMetadata (Clerk has no native concept of location) — read back here
- * on first join rather than via a second organizationInvitation.accepted
- * webhook subscription, avoiding any event-ordering race between the two.
+ * Recovers the location_id and app_role an invite.ts caller attached to the
+ * invitation's publicMetadata (Clerk has no native concept of location, and
+ * only a coarse admin/member role — see toClerkOrgRole in types/user.ts) —
+ * read back here on first join rather than via a second
+ * organizationInvitation.accepted webhook subscription, avoiding any
+ * event-ordering race between the two.
+ *
+ * Falls back to deriving appRole from the event's own coarse Clerk role when
+ * no matching invitation is found — covers seedDemo.ts/reactivate.ts, which
+ * create memberships directly via createOrganizationMembership rather than
+ * an invitation; neither ever needs to claim MANAGER this way.
  */
-async function lookupInvitedLocationId(organizationId: string, email: string): Promise<string | null> {
+async function lookupInvitedMetadata(
+  organizationId: string,
+  email: string,
+  fallbackClerkRole: string
+): Promise<{ locationId: string | null; appRole: string }> {
   const { data: invitations } = await clerkClient.organizations.getOrganizationInvitationList({
     organizationId,
     status: ["accepted"],
   })
   const invitation = invitations.find((inv) => inv.emailAddress === email)
-  const locationId = (invitation?.publicMetadata as Record<string, unknown> | undefined)?.location_id
-  return typeof locationId === "string" ? locationId : null
+  const metadata = invitation?.publicMetadata as Record<string, unknown> | undefined
+  const locationId = typeof metadata?.location_id === "string" ? metadata.location_id : null
+  const appRole =
+    typeof metadata?.app_role === "string"
+      ? metadata.app_role
+      : fallbackClerkRole === "org:admin"
+        ? ROLES.admin
+        : ROLES.user
+  return { locationId, appRole }
 }
 
 /**
- * Keeps the local User/Tenant "read mirror" (name/last_name/email/role, plus
- * the clerk_user_id/clerk_org_id link columns) in sync with Clerk, which owns
- * identity/credentials/org-membership as the source of truth. See
- * resolveAuthContext.ts for how role is read live from the session claim
- * instead of this mirror on the request path — this handler exists for the
- * columns that DO need a local copy (SQL joins/filters, ctx.user.id staying
- * our own uuid).
+ * Keeps the local User/Tenant "read mirror" (name/last_name/email, plus the
+ * clerk_user_id/clerk_org_id link columns) in sync with Clerk, which owns
+ * identity/credentials/org-membership. Role is the one exception: the local
+ * User.role column is authoritative (see resolveAuthContext.ts) and is only
+ * ever set here once, when a brand-new local row is first created — never
+ * overwritten on a resync, since Clerk itself only tracks a coarse admin/
+ * member split and would otherwise clobber a real MANAGER back to USER.
  */
 export async function handleClerkWebhook(req: Request, res: Response) {
   let evt
@@ -62,11 +74,6 @@ export async function handleClerkWebhook(req: Request, res: Response) {
       case "organizationMembership.created":
       case "organizationMembership.updated": {
         const { organization, public_user_data, role } = evt.data
-        const mappedRole = ORG_ROLE_TO_ROLE[role]
-        if (!mappedRole) {
-          logger.warn({ role }, "Unmapped Clerk org role on membership event, skipping")
-          break
-        }
 
         // organization.created isn't guaranteed to have arrived first — an
         // org created via the Backend API with `created_by` in one call
@@ -94,7 +101,8 @@ export async function handleClerkWebhook(req: Request, res: Response) {
         const firstName = public_user_data.first_name ?? ""
         const lastName = public_user_data.last_name ?? ""
 
-        // Link to an existing row by clerk_user_id first (role/name resync).
+        // Link to an existing row by clerk_user_id first (name/status resync
+        // — role is never touched here, the local column is authoritative).
         const [existingByClerkId] = await db
           .select({ id: User.id })
           .from(User)
@@ -104,7 +112,6 @@ export async function handleClerkWebhook(req: Request, res: Response) {
           await db
             .update(User)
             .set({
-              role: mappedRole,
               name: firstName,
               last_name: lastName,
               email,
@@ -123,14 +130,13 @@ export async function handleClerkWebhook(req: Request, res: Response) {
           .where(and(eq(User.email, email), eq(User.tenant_id, tenant.id)))
 
         if (existingByEmail) {
-          // Pre-existing (e.g. migration-seeded) row — its location_id is
-          // real app data set by an admin, not something to overwrite from
-          // the invitation.
+          // Pre-existing (e.g. migration-seeded) row — its role/location_id
+          // are real app data set by an admin, not something to overwrite
+          // from the invitation.
           await db
             .update(User)
             .set({
               clerk_user_id: public_user_data.user_id,
-              role: mappedRole,
               name: firstName,
               last_name: lastName,
               status: STATUS.active,
@@ -138,16 +144,16 @@ export async function handleClerkWebhook(req: Request, res: Response) {
             })
             .where(eq(User.id, existingByEmail.id))
         } else {
-          const location_id = await lookupInvitedLocationId(organization.id, email)
+          const { locationId, appRole } = await lookupInvitedMetadata(organization.id, email, role)
           await db.insert(User).values({
             clerk_user_id: public_user_data.user_id,
             tenant_id: tenant.id,
             name: firstName || email,
             last_name: lastName,
             email,
-            role: mappedRole,
+            role: appRole,
             status: STATUS.active,
-            location_id,
+            location_id: locationId,
           })
         }
         break

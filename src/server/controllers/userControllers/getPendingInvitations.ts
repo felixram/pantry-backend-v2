@@ -3,15 +3,19 @@ import { adminProcedure } from "../../trpc.ts"
 import { TRPCError } from "@trpc/server"
 import { ROLES } from "../../../types/user.ts"
 
-const ORG_ROLE_TO_ROLE: Record<string, string> = {
-  "org:admin": ROLES.admin,
-  "org:manager": ROLES.manager,
-  "org:member": ROLES.user,
-}
-
 function invitationLocationId(publicMetadata: unknown): string | null {
   const locationId = (publicMetadata as Record<string, unknown> | undefined)?.location_id
   return typeof locationId === "string" ? locationId : null
+}
+
+// Clerk only carries a coarse admin/member role (see toClerkOrgRole in
+// types/user.ts) — the real ADMIN/MANAGER/USER role travels in
+// publicMetadata instead, same as location_id above. Falls back to the
+// coarse Clerk role for any invitation created before this field existed.
+function invitationAppRole(inv: { role: string; publicMetadata: unknown }): string {
+  const metaRole = (inv.publicMetadata as Record<string, unknown> | undefined)?.app_role
+  if (typeof metaRole === "string") return metaRole
+  return inv.role === "org:admin" ? ROLES.admin : ROLES.user
 }
 
 /**
@@ -40,14 +44,14 @@ export const getPendingInvitationsProcedure = adminProcedure.query(async ({ ctx 
   const visible =
     ctx.user!.role === ROLES.manager
       ? invitations.filter(
-          (inv) => inv.role === "org:member" && invitationLocationId(inv.publicMetadata) === ctx.userLocationId
+          (inv) => invitationAppRole(inv) === ROLES.user && invitationLocationId(inv.publicMetadata) === ctx.userLocationId
         )
       : invitations
 
   return visible.map((inv) => ({
     id: inv.id,
     email: inv.emailAddress,
-    role: ORG_ROLE_TO_ROLE[inv.role] ?? inv.role,
+    role: invitationAppRole(inv),
     createdAt: new Date(inv.createdAt),
   }))
 })

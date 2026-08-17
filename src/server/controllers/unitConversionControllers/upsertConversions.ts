@@ -1,9 +1,12 @@
 import z from "zod"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { TRPCError } from "@trpc/server"
 import { syncProductUnits } from "../productControllers/helpers/syncProductUnits.ts"
 
-export const upsertConversionsProcedure = authedMutation
+// adminMutation (elevated role) — a mistake here silently corrupts quantity
+// math across stock/counts for the product; reading conversions stays open
+// to everyone (getByProduct.ts), only mutating them is restricted.
+export const upsertConversionsProcedure = adminMutation
   .input(
     z.object({
       product_id: z.string().uuid(),

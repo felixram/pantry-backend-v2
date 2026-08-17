@@ -1,11 +1,11 @@
 import z from "zod"
-import { authedMutation } from "../../trpc.ts"
+import { adminMutation } from "../../trpc.ts"
 import { ProductUnitConversion } from "../../../db/schema/productUnitConversion.ts"
 import { eq, and, ne } from "drizzle-orm"
 import { TRPCError } from "@trpc/server"
 import { syncProductUnits } from "../productControllers/helpers/syncProductUnits.ts"
 
-export const deleteConversionProcedure = authedMutation
+export const deleteConversionProcedure = adminMutation
   .input(
     z.object({
       id: z.string().uuid(),

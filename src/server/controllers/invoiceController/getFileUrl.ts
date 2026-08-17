@@ -4,6 +4,7 @@ import { authedProcedure } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
 import { getSignedUrl } from "../../../services/storage/r2Client.ts"
+import { validateLocationAccess } from "../../../utils/locationFilter.ts"
 
 export const getFileUrlProcedure = authedProcedure
   .input(z.object({ invoiceId: z.string().uuid() }))
@@ -28,6 +29,10 @@ export const getFileUrlProcedure = authedProcedure
         code: "NOT_FOUND",
         message: "Invoice not found",
       })
+    }
+
+    if (invoice.location_id) {
+      validateLocationAccess(ctx.user!, ctx.userLocationId, invoice.location_id)
     }
 
     if (!invoice.original_file_url) {

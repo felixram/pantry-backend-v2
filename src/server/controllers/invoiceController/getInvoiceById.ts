@@ -3,6 +3,7 @@ import { Invoice } from "../../../db/schema/invoice.ts"
 import { authedProcedure } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
+import { validateLocationAccess } from "../../../utils/locationFilter.ts"
 
 export const getInvoiceByIdProcedure = authedProcedure
   .input(z.object({ id: z.string().uuid() }))
@@ -54,6 +55,10 @@ export const getInvoiceByIdProcedure = authedProcedure
         code: "NOT_FOUND",
         message: "Invoice not found",
       })
+    }
+
+    if (invoice.location_id) {
+      validateLocationAccess(ctx.user!, ctx.userLocationId, invoice.location_id)
     }
 
     return invoice

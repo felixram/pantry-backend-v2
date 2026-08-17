@@ -1,10 +1,10 @@
 /**
- * One-off clean-slate migration: link existing Tenants/Users to Clerk.
+ * Production cutover migration: link existing Tenants/Users to Clerk.
  *
  * For each real (non-demo, non-deleted) Tenant without a clerk_org_id yet:
  *   - creates a matching Clerk Organization, sets clerk_org_id
- * For each active (non-deleted) User under it without a clerk_user_id yet:
- *   - sends a Clerk org invitation to their email with the mapped role
+ * For every active (non-deleted) user under it without a clerk_user_id yet:
+ *   - sends a Clerk org invitation to their real email with the mapped role
  *
  * No password/hash migration — invited users set their own new password via
  * Clerk's own invite-acceptance flow. Acceptance triggers the
@@ -16,6 +16,13 @@
  * skipped; users that already have a clerk_user_id are skipped; an invite
  * that fails because one is already pending for that email is logged and
  * skipped rather than aborting the run.
+ *
+ * Sends real invitation emails to every real active user — run this once,
+ * at cutover time, against the production DATABASE_URL and production Clerk
+ * keys, only after the production Clerk webhook is confirmed live (so
+ * accepted invitations link back correctly). Also requires CLERK_APP_URL to
+ * be set to the production frontend domain — invitation links otherwise
+ * point at localhost.
  *
  * Run with: npx tsx scripts/migrateToClerk.ts
  */
@@ -33,20 +40,6 @@ const ROLE_TO_ORG_ROLE: Record<string, string> = {
   [ROLES.manager]: "org:manager",
   [ROLES.user]: "org:member",
 }
-
-// The dev DB's "Default Organization" tenant accumulated ~50 faker-seeded
-// test users (test@test.com, houston.veum64@gmail.com, etc.) from an old
-// seed script — real inboxes we don't own could exist at some of those
-// addresses. Only the accounts actually used for hands-on testing get a
-// real Clerk invitation email; everyone else is left unlinked (they simply
-// won't be able to sign in post-migration, which is fine — they were never
-// used for real testing).
-const REAL_TEST_EMAILS = new Set([
-  "admin@aki-inventory.com",
-  "felixramses.2@gmail.com",
-  "felix@mukuy.com",
-  "felix@akimorinyc.com",
-])
 
 async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
   let clerkOrgId = tenant.clerk_org_id
@@ -70,10 +63,6 @@ async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
     .where(and(eq(User.tenant_id, tenant.id), isNull(User.deletedAt)))
 
   for (const user of users) {
-    if (!REAL_TEST_EMAILS.has(user.email)) {
-      continue
-    }
-
     if (user.clerk_user_id) {
       console.log(`  · ${user.email} — already linked, skipping`)
       continue
@@ -103,7 +92,7 @@ async function migrateTenant(tenant: typeof Tenant.$inferSelect) {
 }
 
 async function migrateToClerk() {
-  console.log("🔑 Starting clean-slate Clerk migration...")
+  console.log("🔑 Starting Clerk migration...")
 
   const tenants = await db
     .select()

@@ -1,8 +1,6 @@
 //entry point for Express and trpc middleware
 import express from "express"
 import dotenv from "dotenv"
-import path from "path"
-import { fileURLToPath } from "url"
 import { createExpressMiddleware } from "@trpc/server/adapters/express"
 import { appRouter } from "./server/routers/index.ts"
 import cors from "cors"
@@ -12,11 +10,8 @@ import { clerkMiddleware } from "@clerk/express"
 import { createContext } from "./server/context.ts"
 import cookieParser from "cookie-parser"
 import { db, closeDatabase } from "./db/index.ts"
-import { sql, eq, and, isNull } from "drizzle-orm"
+import { sql } from "drizzle-orm"
 import { logger } from "./utils/logger.ts"
-import { User } from "./db/schema/users.ts"
-import { Tenant } from "./db/schema/tenant.ts"
-import { Location } from "./db/schema/location.ts"
 import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
 import { handleClerkWebhook } from "./server/webhooks/clerkWebhookHandler.ts"
 import { invoiceUploadRouter } from "./server/routes/invoiceUpload.ts"
@@ -27,10 +22,6 @@ import { purgeExpiredDeletedTaxRates } from "./server/controllers/taxRateControl
 import { sendInventoryCountReminders } from "./server/controllers/inventoryCountControllers/helpers/sendInventoryCountReminders.ts"
 
 dotenv.config()
-
-// Get __dirname equivalent for ESM
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 const app = express()
 const PORT = process.env.PORT || 3030
@@ -255,125 +246,6 @@ app.use(
     },
   })
 )
-
-// Serve static frontend files in production
-const isProduction = process.env.NODE_ENV === "production"
-if (isProduction) {
-  // SSR for landing page - serve pre-rendered HTML for instant load
-  const { renderLandingPage } = await import("./ssr/renderLanding.ts")
-  app.get("/", async (_req, res) => {
-    try {
-      const html = await renderLandingPage("/")
-      res.set("Content-Type", "text/html")
-      res.send(html)
-    } catch (error) {
-      logger.error({ error }, "SSR render failed, falling back to static")
-      res.sendFile(path.join(__dirname, "../../client/dist/index.html"))
-    }
-  })
-
-  // Protected pages — inject __SSR_USER__ for instant auth, data loads client-side
-  const { verifyToken } = await import("./utils/tokenUtils.ts")
-  const fs = await import("fs")
-
-  let templateCache: string | null = null
-
-  // NOTE: /inventory/count is intentionally NOT listed here — it handles its own
-  // authentication via magic link tokens in the query string (no cookie required on entry).
-  const ssrProtectedRoutes = [
-    "/dashboard",
-    "/products",
-    "/stock",
-    "/purchase-orders",
-    "/suppliers",
-    "/categories",
-    "/locations",
-    "/users",
-    "/invoices",
-  ]
-
-  app.get(ssrProtectedRoutes, async (req, res) => {
-    try {
-      const token = req.cookies?.token
-      if (!token) {
-        return res.redirect("/login")
-      }
-
-      const jwtPayload = verifyToken(token)
-      if (!jwtPayload) {
-        return res.redirect("/login")
-      }
-
-      // Quick user query for auth store pre-population (join Tenant to check deletedAt)
-      const [dbUser] = await db
-        .select({
-          name: User.name,
-          last_name: User.last_name,
-          email: User.email,
-          location_id: User.location_id,
-          tenant_id: User.tenant_id,
-          tenantDeletedAt: Tenant.deletedAt,
-        })
-        .from(User)
-        .innerJoin(Tenant, eq(User.tenant_id, Tenant.id))
-        .where(eq(User.id, jwtPayload.id))
-
-      // If tenant is deleted, clear stale cookie and redirect to login
-      if (!dbUser || dbUser.tenantDeletedAt) {
-        res.cookie("token", "", {
-          httpOnly: true,
-          expires: new Date(0),
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "strict",
-          path: "/",
-        })
-        return res.redirect("/login")
-      }
-
-      const ssrUser = dbUser
-        ? {
-            id: jwtPayload.id,
-            role: jwtPayload.role,
-            name: `${dbUser.name} ${dbUser.last_name}`.trim(),
-            email: dbUser.email,
-            location_id: dbUser.location_id,
-          }
-        : { id: jwtPayload.id, role: jwtPayload.role }
-
-      // Read template (cached after first read)
-      if (!templateCache) {
-        templateCache = fs.readFileSync(
-          path.join(__dirname, "../../client/dist/index.html"),
-          "utf-8"
-        )
-      }
-
-      // Inject only auth data — no data prefetch, no renderToString
-      const html = templateCache.replace(
-        "</head>",
-        `<script>window.__SSR_USER__ = ${JSON.stringify(ssrUser)};</script>\n</head>`
-      )
-
-      res.set("Content-Type", "text/html")
-      res.send(html)
-    } catch (error) {
-      logger.error({ error, path: req.path }, "Auth injection failed, falling back to static")
-      res.sendFile(path.join(__dirname, "../../client/dist/index.html"))
-    }
-  })
-
-  // Serve static files from the client build directory
-  const clientDistPath = path.join(__dirname, "../../client/dist")
-  app.use(express.static(clientDistPath))
-
-  // Handle client-side routing - serve index.html for all non-API routes
-  // Express 5.x requires named wildcard parameter
-  app.get("/{*splat}", (_req, res) => {
-    res.sendFile(path.join(clientDistPath, "index.html"))
-  })
-
-  logger.info({ path: clientDistPath }, "Serving static frontend files with SSR for landing and protected pages")
-}
 
 // Start server
 const server = app.listen(PORT, () => {

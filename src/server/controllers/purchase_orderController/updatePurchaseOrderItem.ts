@@ -109,6 +109,7 @@ export const updatePurchaseOrderItem = authedMutation
 
       // 5. Store old values for audit
       const oldValue = {
+        product_name: item.product?.name,
         qty: item.qty,
         unit_price: item.unit_price,
         unit: item.unit,
@@ -163,6 +164,7 @@ export const updatePurchaseOrderItem = authedMutation
           fieldChanged: "item_updated",
           oldValue: JSON.stringify(oldValue),
           newValue: JSON.stringify({
+            product_name: item.product?.name,
             qty: newQty,
             unit_price: newUnitPrice,
             unit: newUnit,

@@ -154,6 +154,7 @@ export const addPurchaseOrderItem = authedMutation
           oldValue: "null",
           newValue: JSON.stringify({
             product_id: input.product_id,
+            product_name: product.name,
             qty: input.qty,
             unit_price: input.unit_price,
             unit: input.unit,

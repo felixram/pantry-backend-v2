@@ -37,6 +37,9 @@ export const removePurchaseOrderItem = authedMutation
         with: {
           purchaseOrderItems: {
             where: isNull(PurchaseOrderItem.deletedAt),
+            with: {
+              product: true,
+            },
           },
         },
       });
@@ -94,6 +97,7 @@ export const removePurchaseOrderItem = authedMutation
       // 4. Store old value for audit
       const oldValue = {
         product_id: item.product_id,
+        product_name: item.product?.name,
         qty: item.qty,
         unit_price: item.unit_price,
       };

@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      # No real database needed — the 308 unit tests are pure logic (no
+      # DATABASE_URL ever actually gets queried), but db/index.ts still
+      # requires the var to be set just to import the module.
+      - name: Run tests
+        run: npm run test:run
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          JWT_SECRET: ci-test-secret-not-for-production
+          NODE_ENV: test
+          PORT: "3030"

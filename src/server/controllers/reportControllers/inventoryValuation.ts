@@ -1,5 +1,5 @@
 import z from "zod";
-import { adminProcedure } from "../../trpc.ts";
+import { strictAdminProcedure } from "../../trpc.ts";
 import { Stock } from "../../../db/schema/stock.ts";
 import { Product } from "../../../db/schema/product.ts";
 import { ProductVersion } from "../../../db/schema/productVersion.ts";
@@ -10,7 +10,7 @@ import { getLocationFilter } from "../../../utils/locationFilter.ts";
 import { TRPCError } from "@trpc/server";
 import { getBaseUnitCost, findBaseUnit, findUnit } from "../../../utils/unitConversion.ts";
 
-export const inventoryValuation = adminProcedure
+export const inventoryValuation = strictAdminProcedure
   .input(
     z.object({
       location_id: z.string().optional(),

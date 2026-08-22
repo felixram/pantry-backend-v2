@@ -1,5 +1,5 @@
 import z from "zod";
-import { authedProcedure } from "../../trpc.ts";
+import { strictAdminProcedure } from "../../trpc.ts";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
@@ -9,7 +9,7 @@ import { calculateSubtotal } from "../../../utils/poTotals.ts";
 import { roundToCent } from "../../../utils/money.ts";
 import { TRPCError } from "@trpc/server";
 
-export const purchaseOrderSummary = authedProcedure
+export const purchaseOrderSummary = strictAdminProcedure
   .input(
     z.object({
       status: z.string().optional(),

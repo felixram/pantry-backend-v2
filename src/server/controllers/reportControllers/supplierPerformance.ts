@@ -1,5 +1,5 @@
 import z from "zod";
-import { authedProcedure } from "../../trpc.ts";
+import { strictAdminProcedure } from "../../trpc.ts";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { Supplier } from "../../../db/schema/supplier.ts";
@@ -10,7 +10,7 @@ import { getLocationFilter } from "../../../utils/locationFilter.ts";
 import { calculateSubtotal } from "../../../utils/poTotals.ts";
 import { roundToCent } from "../../../utils/money.ts";
 
-export const supplierPerformance = authedProcedure
+export const supplierPerformance = strictAdminProcedure
   .input(
     z.object({
       supplier_id: z.string().optional(),

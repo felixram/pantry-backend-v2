@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server"
 import type { createContext } from "./context.ts"
-import { hasElevatedRole } from "../types/user.ts"
+import { hasElevatedRole, ROLES } from "../types/user.ts"
 
 export const t = initTRPC
   .context<Awaited<ReturnType<typeof createContext>>>()
@@ -38,6 +38,20 @@ const isAdmin = t.middleware(({ ctx, next }) => {
   return next()
 })
 
+// Despite the name, adminProcedure above actually means "elevated role"
+// (ADMIN or MANAGER) — this one is for the rare case that genuinely needs
+// to exclude MANAGER too (e.g. Reports, which surface tenant-wide financial
+// figures MANAGER shouldn't see).
+const isStrictAdmin = t.middleware(({ ctx, next }) => {
+  if (!ctx.user || ctx.user.role !== ROLES.admin) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You dont have permissions to perform this action.",
+    })
+  }
+  return next()
+})
+
 const isAuthed = t.middleware(({ ctx, next }) => {
   if (!ctx.user)
     throw new TRPCError({
@@ -62,6 +76,7 @@ const isNotDemoTenant = t.middleware(({ ctx, next }) => {
 // Query procedures (unchanged - work for demo accounts)
 export const adminProcedure = t.procedure.use(isAdmin)
 export const authedProcedure = t.procedure.use(isAuthed)
+export const strictAdminProcedure = t.procedure.use(isStrictAdmin)
 
 // Mutation procedures (blocked for demo accounts)
 export const adminMutation = t.procedure.use(isAdmin).use(isNotDemoTenant)

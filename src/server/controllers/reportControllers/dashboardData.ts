@@ -27,7 +27,7 @@ import {
   inArray,
 } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { hasElevatedRole } from "../../../types/user.ts";
+import { ROLES } from "../../../types/user.ts";
 import { getLocationFilter } from "../../../utils/locationFilter.ts";
 
 // Helper to calculate growth percentage from current/previous month counts
@@ -67,8 +67,11 @@ export const dashboardData = authedProcedure
       });
     }
 
-    const isElevated = hasElevatedRole(ctx.user!.role);
-    const includeValuation = input.includeValuation && isElevated;
+    // Stock value is Reports-level data (see strictAdminProcedure) — MANAGER
+    // must not receive it in the response at all, not just have it hidden by
+    // the frontend, since the raw payload is inspectable via devtools.
+    const isStrictAdmin = ctx.user!.role === ROLES.admin;
+    const includeValuation = input.includeValuation && isStrictAdmin;
 
     // Location-based access control: managers only see their location's data
     const locationFilter = getLocationFilter(ctx.user!, ctx.userLocationId, input.location_id);

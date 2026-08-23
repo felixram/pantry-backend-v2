@@ -108,12 +108,32 @@ async function seedDemo() {
   const clerkOrg = await clerkClient.organizations.createOrganization({
     name: "Vantory Demo Corp",
   })
-  const clerkUser = await clerkClient.users.createUser({
-    emailAddress: [DEMO_EMAIL],
-    password: DEMO_PASSWORD,
-    firstName: "Demo",
-    lastName: "Admin",
-  })
+  // Re-running this script against a fresh/different database (e.g. a new
+  // dev DB split off from production) can hit a Clerk user that already
+  // exists from a previous run against a different DB — Clerk users are
+  // unique per email per instance regardless of which DB they're linked to.
+  // Fall back to the existing account instead of failing outright.
+  let clerkUser
+  try {
+    clerkUser = await clerkClient.users.createUser({
+      emailAddress: [DEMO_EMAIL],
+      password: DEMO_PASSWORD,
+      firstName: "Demo",
+      lastName: "Admin",
+    })
+  } catch (err) {
+    const isExisting =
+      err && typeof err === "object" && "errors" in err &&
+      Array.isArray((err as { errors: unknown[] }).errors) &&
+      (err as { errors: { code?: string }[] }).errors.some((e) => e.code === "form_identifier_exists")
+    if (!isExisting) throw err
+
+    console.log(`  · Clerk user for ${DEMO_EMAIL} already exists (from a prior run) — reusing it.`)
+    const { data: existing } = await clerkClient.users.getUserList({ emailAddress: [DEMO_EMAIL] })
+    const found = existing[0]
+    if (!found) throw new Error(`Clerk reported ${DEMO_EMAIL} as taken but getUserList found no match`)
+    clerkUser = found
+  }
   await clerkClient.organizations.createOrganizationMembership({
     organizationId: clerkOrg.id,
     userId: clerkUser.id,

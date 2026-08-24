@@ -25,6 +25,7 @@ interface NotifyTarget {
   name: string;
   email: string;
   role: string;
+  tenantId: string;
   tenantName: string;
   locationId: string;
   isFallback: boolean;
@@ -61,6 +62,7 @@ export async function sendInventoryCountReminders(
       count_reminder_tz: Location.count_reminder_tz,
       count_designated_user_id: Location.count_designated_user_id,
       last_reminder_sent_week_identifier: Location.last_reminder_sent_week_identifier,
+      tenantId: Location.tenant_id,
       tenantName: Tenant.name,
     })
     .from(Location)
@@ -71,6 +73,7 @@ export async function sendInventoryCountReminders(
   let locationsSkippedAlreadySent = 0;
   const designatedUserIdByLocation = new Map<string, string>();
   const tenantNameByLocation = new Map<string, string>();
+  const tenantIdByLocation = new Map<string, string>();
 
   for (const loc of enabledLocations) {
     if (loc.count_reminder_day === null || !loc.count_reminder_time || !loc.count_designated_user_id) continue;
@@ -91,6 +94,7 @@ export async function sendInventoryCountReminders(
 
     designatedUserIdByLocation.set(loc.id, loc.count_designated_user_id);
     tenantNameByLocation.set(loc.id, loc.tenantName);
+    tenantIdByLocation.set(loc.id, loc.tenantId);
   }
 
   const matchedLocationIds = [...designatedUserIdByLocation.keys()];
@@ -148,9 +152,10 @@ export async function sendInventoryCountReminders(
   for (const locId of matchedLocationIds) {
     const designated = activeUserById.get(designatedUserIdByLocation.get(locId)!);
     const tenantName = tenantNameByLocation.get(locId) ?? "your organization";
+    const tenantId = tenantIdByLocation.get(locId)!;
 
     if (designated) {
-      targets.push({ ...designated, tenantName, locationId: locId, isFallback: false });
+      targets.push({ ...designated, tenantId, tenantName, locationId: locId, isFallback: false });
       locationsToStamp.push(locId);
       continue;
     }
@@ -162,7 +167,7 @@ export async function sendInventoryCountReminders(
         { locationId: locId, fallbackUserId: fallback.id },
         "Inventory reminder: designated counter inactive, falling back to location manager",
       );
-      targets.push({ ...fallback, tenantName, locationId: locId, isFallback: true });
+      targets.push({ ...fallback, tenantId, tenantName, locationId: locId, isFallback: true });
       locationsToStamp.push(locId);
     } else {
       locationsNoRecipient++;
@@ -183,6 +188,7 @@ export async function sendInventoryCountReminders(
         magicLink,
         orgName: target.tenantName,
         weekIdentifier,
+        tenantId: target.tenantId,
       });
     }),
   );

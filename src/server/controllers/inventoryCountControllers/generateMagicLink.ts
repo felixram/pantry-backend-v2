@@ -72,6 +72,7 @@ export const generateMagicLink = authedMutation
       magicLink,
       orgName: tenant?.name ?? "your organization",
       weekIdentifier: getISOWeekIdentifier(new Date()),
+      tenantId: ctx.tenantId,
     });
 
     return { magicLink, userId: user.id, expiresIn: "24h", emailSent: emailResult.success };

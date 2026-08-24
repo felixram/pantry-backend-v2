@@ -29,6 +29,8 @@ import { Tenant } from "../../db/schema/tenant.ts"
 import { eq, and, isNull } from "drizzle-orm"
 import { hasElevatedRole } from "../../types/user.ts"
 import { STATUS } from "../../types/user.ts"
+import { recordUsageEvent } from "../usage/recordUsageEvent.ts"
+import { USAGE_EVENT_TYPE } from "../../types/usage.ts"
 
 interface SendEmailResult {
   success: boolean
@@ -42,8 +44,9 @@ export async function sendInvitationEmail(params: {
   inviteUrl: string
   organizationName: string
   expiresAt: Date
+  tenantId?: string
 }): Promise<SendEmailResult> {
-  const { to, userName, inviteUrl, organizationName, expiresAt } = params
+  const { to, userName, inviteUrl, organizationName, expiresAt, tenantId } = params
 
   const resend = getResendClient()
   const fromEmail = getFromEmail()
@@ -85,6 +88,14 @@ export async function sendInvitationEmail(params: {
     }
 
     console.log({ type: "email_invitation_sent", messageId: data?.id, to })
+    if (tenantId) {
+      await recordUsageEvent({
+        tenantId,
+        eventType: USAGE_EVENT_TYPE.email_sent,
+        quantity: 1,
+        metadata: { kind: "invitation", messageId: data?.id },
+      })
+    }
     return { success: true, messageId: data?.id }
   } catch (err) {
     console.error({ type: "email_invitation_exception", error: err, to })
@@ -97,8 +108,9 @@ export async function sendPasswordResetEmail(params: {
   userName: string
   resetUrl: string
   expiresAt: Date
+  tenantId?: string
 }): Promise<SendEmailResult> {
-  const { to, userName, resetUrl, expiresAt } = params
+  const { to, userName, resetUrl, expiresAt, tenantId } = params
 
   const resend = getResendClient()
   const fromEmail = getFromEmail()
@@ -128,6 +140,14 @@ export async function sendPasswordResetEmail(params: {
     }
 
     console.log({ type: "email_password_reset_sent", messageId: data?.id, to })
+    if (tenantId) {
+      await recordUsageEvent({
+        tenantId,
+        eventType: USAGE_EVENT_TYPE.email_sent,
+        quantity: 1,
+        metadata: { kind: "password_reset", messageId: data?.id },
+      })
+    }
     return { success: true, messageId: data?.id }
   } catch (err) {
     console.error({ type: "email_password_reset_exception", error: err, to })
@@ -141,8 +161,9 @@ export async function sendInventoryCountReminder(params: {
   magicLink: string
   orgName: string
   weekIdentifier: string
+  tenantId?: string
 }): Promise<SendEmailResult> {
-  const { to, userName, magicLink, orgName, weekIdentifier } = params
+  const { to, userName, magicLink, orgName, weekIdentifier, tenantId } = params
 
   const resend = getResendClient()
   const fromEmail = getFromEmail()
@@ -173,6 +194,14 @@ export async function sendInventoryCountReminder(params: {
     }
 
     console.log({ type: "email_inventory_reminder_sent", messageId: data?.id, to })
+    if (tenantId) {
+      await recordUsageEvent({
+        tenantId,
+        eventType: USAGE_EVENT_TYPE.email_sent,
+        quantity: 1,
+        metadata: { kind: "inventory_count_reminder", messageId: data?.id },
+      })
+    }
     return { success: true, messageId: data?.id }
   } catch (err) {
     console.error({ type: "email_inventory_reminder_exception", error: err, to })
@@ -183,8 +212,9 @@ export async function sendInventoryCountReminder(params: {
 export async function sendInvoiceBounceEmail(params: {
   to: string
   inboundAddress: string
+  tenantId?: string
 }): Promise<SendEmailResult> {
-  const { to, inboundAddress } = params
+  const { to, inboundAddress, tenantId } = params
 
   const resend = getResendClient()
   const fromEmail = getFromEmail()
@@ -214,6 +244,14 @@ export async function sendInvoiceBounceEmail(params: {
     }
 
     console.log({ type: "email_invoice_bounce_sent", messageId: data?.id, to })
+    if (tenantId) {
+      await recordUsageEvent({
+        tenantId,
+        eventType: USAGE_EVENT_TYPE.email_sent,
+        quantity: 1,
+        metadata: { kind: "invoice_bounce", messageId: data?.id },
+      })
+    }
     return { success: true, messageId: data?.id }
   } catch (err) {
     console.error({ type: "email_invoice_bounce_exception", error: err, to })
@@ -229,8 +267,9 @@ export async function sendInvoiceAcknowledgmentEmail(params: {
   senderName: string
   itemCount: number
   receivedAt: Date
+  tenantId?: string
 }): Promise<SendEmailResult> {
-  const { to, senderName, itemCount, receivedAt } = params
+  const { to, senderName, itemCount, receivedAt, tenantId } = params
 
   const resend = getResendClient()
   const fromEmail = getFromEmail()
@@ -269,6 +308,14 @@ export async function sendInvoiceAcknowledgmentEmail(params: {
     }
 
     console.log({ type: "email_invoice_ack_sent", messageId: data?.id, to })
+    if (tenantId) {
+      await recordUsageEvent({
+        tenantId,
+        eventType: USAGE_EVENT_TYPE.email_sent,
+        quantity: 1,
+        metadata: { kind: "invoice_acknowledgment", messageId: data?.id },
+      })
+    }
     return { success: true, messageId: data?.id }
   } catch (err) {
     console.error({ type: "email_invoice_ack_exception", error: err, to })
@@ -349,12 +396,18 @@ export async function sendInvoiceReceivedNotification(params: {
       }
 
       try {
-        await resend.emails.send({
+        const { data } = await resend.emails.send({
           from: `Vantory <${fromEmail}>`,
           to: [user.email],
           subject: `New invoice received from ${supplierName}`,
           html: getInvoiceReceivedEmailHtml(templateParams),
           text: getInvoiceReceivedEmailText(templateParams),
+        })
+        await recordUsageEvent({
+          tenantId,
+          eventType: USAGE_EVENT_TYPE.email_sent,
+          quantity: 1,
+          metadata: { kind: "invoice_received_notification", messageId: data?.id },
         })
       } catch (err) {
         console.error({ type: "email_invoice_received_error", error: err, to: user.email })

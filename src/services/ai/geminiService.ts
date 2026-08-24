@@ -4,6 +4,10 @@ import {
   inferDiscountPercent,
   isLineTotalConsistent,
 } from "../../utils/discountMath.ts";
+import { recordUsageEvent } from "../usage/recordUsageEvent.ts";
+import { USAGE_EVENT_TYPE } from "../../types/usage.ts";
+
+const GEMINI_MODEL = "gemini-3.1-flash-lite";
 
 let genAI: GoogleGenAI | null = null;
 
@@ -126,6 +130,7 @@ export async function extractInvoiceData(
   fileBuffer: Buffer,
   mimeType: string,
   supplierContext?: string | null,
+  tenantId?: string,
 ): Promise<InvoiceExtractionResult> {
   const ai = getGenAI();
   if (!ai) {
@@ -147,13 +152,25 @@ export async function extractInvoiceData(
         ? `${supplierContext}\n\n${EXTRACTION_PROMPT}`
         : EXTRACTION_PROMPT;
       const result = await ai.models.generateContent({
-        model: "gemini-3.1-flash-lite",
+        model: GEMINI_MODEL,
         contents: [fullPrompt, fileData],
         config: {
           responseMimeType: "application/json",
           responseSchema,
         },
       });
+
+      if (tenantId) {
+        const promptTokens = result.usageMetadata?.promptTokenCount ?? 0;
+        const candidateTokens = result.usageMetadata?.candidatesTokenCount ?? 0;
+        await recordUsageEvent({
+          tenantId,
+          eventType: USAGE_EVENT_TYPE.ai_invoice_extraction,
+          quantity: promptTokens + candidateTokens,
+          metadata: { model: GEMINI_MODEL, promptTokens, candidateTokens, attempt: attempt + 1 },
+        });
+      }
+
       const text = result.text;
       if (!text) {
         throw new Error("Gemini returned an empty response");

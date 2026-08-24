@@ -75,7 +75,8 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
     const extracted = await extractInvoiceData(
       fileBuffer,
       invoice.original_file_type || "application/pdf",
-      supplierContext
+      supplierContext,
+      invoice.tenant_id
     )
 
     // Store extracted data + invoice-level tax totals
@@ -221,6 +222,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
           senderName: extracted.supplier.name || invoice.from_name || "there",
           itemCount: extracted.items.length,
           receivedAt: invoice.received_at ?? new Date(),
+          tenantId: invoice.tenant_id,
         })
       } catch (ackError) {
         logger.error({ error: ackError, invoiceId }, "Failed to send invoice acknowledgment to sender")

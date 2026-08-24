@@ -1,6 +1,8 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { logger } from "../../utils/logger.ts"
+import { recordUsageEvent } from "../usage/recordUsageEvent.ts"
+import { USAGE_EVENT_TYPE } from "../../types/usage.ts"
 
 let s3Client: S3Client | null = null
 
@@ -62,6 +64,14 @@ export async function uploadInvoiceFile(
   )
 
   logger.info({ key, contentType }, "Invoice file uploaded to R2")
+
+  await recordUsageEvent({
+    tenantId,
+    eventType: USAGE_EVENT_TYPE.file_storage,
+    quantity: buffer.length,
+    metadata: { invoiceId, filename, contentType },
+  })
+
   return key
 }
 

@@ -125,7 +125,7 @@ export async function handleResendInbound(req: Request, res: Response) {
       resolution.tenantId
     )
     if (!isSupplierDomain && !isOrgUser) {
-      sendInvoiceBounceEmail({ to: fromEmail, inboundAddress: targetAddress }).catch(() => {})
+      sendInvoiceBounceEmail({ to: fromEmail, inboundAddress: targetAddress, tenantId: resolution.tenantId }).catch(() => {})
       return res.status(200).json({ success: true, bounced: true })
     }
 

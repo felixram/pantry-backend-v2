@@ -52,6 +52,19 @@ const isStrictAdmin = t.middleware(({ ctx, next }) => {
   return next()
 })
 
+// App-owner-only console (see routers/owner/owner.ts) — completely
+// independent of ctx.user/tenant. Gated on ctx.isOwner, set in context.ts
+// from the owner-console's own JWT (utils/ownerAuth.ts), never from Clerk.
+const isOwner = t.middleware(({ ctx, next }) => {
+  if (!ctx.isOwner) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You dont have permissions to perform this action.",
+    })
+  }
+  return next()
+})
+
 const isAuthed = t.middleware(({ ctx, next }) => {
   if (!ctx.user)
     throw new TRPCError({
@@ -77,6 +90,7 @@ const isNotDemoTenant = t.middleware(({ ctx, next }) => {
 export const adminProcedure = t.procedure.use(isAdmin)
 export const authedProcedure = t.procedure.use(isAuthed)
 export const strictAdminProcedure = t.procedure.use(isStrictAdmin)
+export const ownerProcedure = t.procedure.use(isOwner)
 
 // Mutation procedures (blocked for demo accounts)
 export const adminMutation = t.procedure.use(isAdmin).use(isNotDemoTenant)

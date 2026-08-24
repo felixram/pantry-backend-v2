@@ -14,9 +14,11 @@ import { tenantRouter } from "./tenant/tenant.ts"
 import { unitConversionRouter } from "./unitConversion/unitConversion.ts"
 import { invoiceRouter } from "./invoice/invoice.ts"
 import { taxRateRouter } from "./taxRate/taxRate.ts"
+import { ownerRouter } from "./owner/owner.ts"
 //routes
 
 export const appRouter = t.router({
+  owner: ownerRouter,
   user: userRouter,
   auth: authRouter,
   location: locationRouter,

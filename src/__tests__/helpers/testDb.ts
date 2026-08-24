@@ -2,6 +2,9 @@ import { db } from '../../db/index.js';
 import { sql } from 'drizzle-orm';
 import { User } from '../../db/schema/users.js';
 import { Tenant } from '../../db/schema/tenant.js';
+import { Location } from '../../db/schema/location.js';
+import { Supplier } from '../../db/schema/supplier.js';
+import { Product } from '../../db/schema/product.js';
 
 // Cache for test tenant to avoid creating multiple
 let testTenantId: string | null = null;
@@ -11,6 +14,8 @@ export async function clearDatabase() {
   testTenantId = null;
 
   // Truncate all tables in correct order (respecting foreign keys)
+  await db.execute(sql`TRUNCATE TABLE invoice_item CASCADE`);
+  await db.execute(sql`TRUNCATE TABLE invoice CASCADE`);
   await db.execute(sql`TRUNCATE TABLE stock_movement CASCADE`);
   await db.execute(sql`TRUNCATE TABLE purchase_order_item CASCADE`);
   await db.execute(sql`TRUNCATE TABLE purchase_order_audit CASCADE`);
@@ -58,4 +63,37 @@ export async function createTestUser(overrides: Partial<typeof User.$inferInsert
 
   const [user] = await db.insert(User).values({ ...defaults, ...overrides }).returning();
   return user;
+}
+
+export async function createTestLocation(overrides: Partial<typeof Location.$inferInsert> = {}) {
+  const tenantId = overrides.tenant_id || (await getOrCreateTestTenant());
+  const defaults = {
+    name: 'Test Location',
+    address: '123 Test St',
+    tenant_id: tenantId,
+  };
+  const [location] = await db.insert(Location).values({ ...defaults, ...overrides }).returning();
+  return location;
+}
+
+export async function createTestSupplier(overrides: Partial<typeof Supplier.$inferInsert> = {}) {
+  const tenantId = overrides.tenant_id || (await getOrCreateTestTenant());
+  const defaults = {
+    name: 'Test Supplier',
+    contact_name: 'Test Contact',
+    tenant_id: tenantId,
+  };
+  const [supplier] = await db.insert(Supplier).values({ ...defaults, ...overrides }).returning();
+  return supplier;
+}
+
+export async function createTestProduct(overrides: Partial<typeof Product.$inferInsert> = {}) {
+  const tenantId = overrides.tenant_id || (await getOrCreateTestTenant());
+  const defaults = {
+    name: 'Test Product',
+    unit: ['each'],
+    tenant_id: tenantId,
+  };
+  const [product] = await db.insert(Product).values({ ...defaults, ...overrides }).returning();
+  return product;
 }

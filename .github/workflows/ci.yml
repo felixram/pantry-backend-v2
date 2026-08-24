@@ -9,6 +9,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # Real Postgres for the integration tests (src/__tests__/integration/**),
+    # which exercise testDb.ts against an actual database — the unit tests
+    # are pure logic and never touch it, but db/index.ts still needs
+    # DATABASE_URL set just to import the module either way.
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5432/test
+      JWT_SECRET: ci-test-secret-not-for-production
+      NODE_ENV: test
+      PORT: "3030"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,13 +48,8 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      # No real database needed — the 308 unit tests are pure logic (no
-      # DATABASE_URL ever actually gets queried), but db/index.ts still
-      # requires the var to be set just to import the module.
+      - name: Run database migrations
+        run: npm run m
+
       - name: Run tests
         run: npm run test:run
-        env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/test
-          JWT_SECRET: ci-test-secret-not-for-production
-          NODE_ENV: test
-          PORT: "3030"

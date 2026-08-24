@@ -25,6 +25,15 @@ export default defineConfig({
     },
     testTimeout: 10000,
     hookTimeout: 10000,
+    // Integration tests (src/__tests__/integration/**) share one real
+    // Postgres database and each does beforeEach(() => clearDatabase()) —
+    // with vitest's default file-level parallelism, one file's TRUNCATE
+    // CASCADE can wipe tables mid-transaction for a test running
+    // concurrently in another file (confirmed: this caused real, flaky
+    // "Product not found" / "Stock record not found" failures in CI).
+    // The full suite runs in ~2s either way, so serializing costs nothing
+    // meaningful in exchange for not sharing mutable state across files.
+    fileParallelism: false,
   },
   resolve: {
     alias: {

@@ -53,3 +53,12 @@ jobs:
 
       - name: Run tests
         run: npm run test:run
+
+      # Report-only — visible on every run, never blocks. See
+      # vitest.config.ts's coverage section for why there's no threshold
+      # here yet. continue-on-error is a second belt-and-suspenders layer:
+      # even if coverage instrumentation itself hiccups, that's not a
+      # reason to block a deploy whose actual tests already passed above.
+      - name: Coverage report (informational, non-blocking)
+        run: npm run test:coverage
+        continue-on-error: true

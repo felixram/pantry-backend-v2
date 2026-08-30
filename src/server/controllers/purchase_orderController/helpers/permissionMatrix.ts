@@ -312,12 +312,22 @@ export function canEditUnlockedPO(
  * "lock" and the unlocked-edit permissions are the actions PERMISSION_MATRIX
  * never grants directly (their eligibility depends on runtime state —
  * is_unlocked — not just status+role), so they're computed separately here.
+ *
+ * PERMISSION_MATRIX's APPROVED entry grants "unlock" by status+role alone —
+ * it has no notion of is_unlocked, so once a PO is already unlocked it would
+ * otherwise still report "unlock" as allowed (the mutation itself rejects
+ * unlocking an already-unlocked PO, but the frontend renders buttons
+ * straight off this list, so the stale entry left the button visible).
+ * Strip it here the same way "lock"/edit are added here.
  */
 export function computeAllowedActions(
   po: { status: string; is_unlocked: boolean },
   role: userRoles
 ): POPermissionAction[] {
   const actions = new Set(getAllowedActions(role, po.status));
+  if (po.is_unlocked) {
+    actions.delete("unlock");
+  }
   if (canLockPO(po, role)) {
     actions.add("lock");
   }

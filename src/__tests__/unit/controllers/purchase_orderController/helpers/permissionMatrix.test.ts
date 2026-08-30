@@ -136,5 +136,22 @@ describe('unit | permissionMatrix (PO action gating)', () => {
       const actions = computeAllowedActions({ status: ORDER_STATUS.draft, is_unlocked: true }, ROLES.user);
       expect(actions.sort()).toEqual(['view', 'edit_header', 'edit_items', 'delete', 'submit_for_approval'].sort());
     });
+
+    it('drops "unlock" once the PO is already unlocked, even though PERMISSION_MATRIX grants it by status+role alone', () => {
+      // Baseline: PERMISSION_MATRIX alone grants "unlock" for APPROVED+manager regardless of runtime state.
+      expect(canPerformAction(ROLES.manager, ORDER_STATUS.approved, 'unlock')).toBe(true);
+
+      const locked = computeAllowedActions({ status: ORDER_STATUS.approved, is_unlocked: false }, ROLES.manager);
+      expect(locked).toContain('unlock');
+
+      // But an already-unlocked PO must not still offer "unlock" — the mutation itself
+      // rejects unlocking a PO that's already unlocked, and the frontend renders its
+      // buttons straight off this list, so a stale entry here left the button visible
+      // (and clickable-but-failing) with no way for the user to tell it was stale.
+      const unlocked = computeAllowedActions({ status: ORDER_STATUS.approved, is_unlocked: true }, ROLES.manager);
+      expect(unlocked).not.toContain('unlock');
+      // "lock" takes its place instead.
+      expect(unlocked).toContain('lock');
+    });
   });
 });

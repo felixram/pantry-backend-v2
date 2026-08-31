@@ -21,15 +21,16 @@ export interface FormatMoneyOptions {
  */
 export function formatMoney(
   amount: number,
-  currency: string = "USD",
+  currency: string | null | undefined = "USD",
   opts: FormatMoneyOptions = {},
 ): string {
   const value = Number.isFinite(amount) ? amount : 0
   const fractionDigits = opts.whole ? 0 : 2
+  const code = currency || "USD"
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
-      currency,
+      currency: code,
       minimumFractionDigits: fractionDigits,
       maximumFractionDigits: fractionDigits,
     }).format(value)

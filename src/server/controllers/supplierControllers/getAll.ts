@@ -14,7 +14,7 @@ export const getAllSupplierProcedure = authedProcedure
       sortByType: z.enum(["asc", "desc"]).optional(),
       supplier_type: z.enum(["PRIMARY", "SECONDARY"]).optional(),
       columns: z
-        .array(z.enum(["id", "name", "minimum_order_amount", "free_shipping_minimum", "shipping_fee"]))
+        .array(z.enum(["id", "name", "minimum_order_amount", "free_shipping_minimum", "shipping_fee", "currency"]))
         .optional(),
     })
   )
@@ -47,6 +47,7 @@ export const getAllSupplierProcedure = authedProcedure
             ? { free_shipping_minimum: Supplier.free_shipping_minimum }
             : {}),
           ...(input.columns.includes("shipping_fee") ? { shipping_fee: Supplier.shipping_fee } : {}),
+          ...(input.columns.includes("currency") ? { currency: Supplier.currency } : {}),
           totalCount: sql<number>`COUNT(*) OVER()`.as("total_count"),
         }
       : {

@@ -87,6 +87,7 @@ export const getAllPuchaseOrders = authedProcedure
           id: PurchaseOrder.id,
           po_number: PurchaseOrder.po_number,
           status: PurchaseOrder.status,
+          currency: PurchaseOrder.currency,
           is_unlocked: PurchaseOrder.is_unlocked,
           createdAt: PurchaseOrder.createdAt,
           supplierName: Supplier.name,

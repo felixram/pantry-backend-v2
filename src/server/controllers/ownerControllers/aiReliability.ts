@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { and, count, eq, gte, isNull, sql } from "drizzle-orm"
+import { and, count, eq, gte, inArray, isNull, sql } from "drizzle-orm"
 import { ownerProcedure } from "../../trpc.ts"
 import { UsageEvent } from "../../../db/schema/usageEvent.ts"
 import { Tenant } from "../../../db/schema/tenant.ts"
@@ -48,7 +48,10 @@ export const aiReliability = ownerProcedure
       .where(
         and(
           gte(UsageEvent.createdAt, since),
-          sql`${UsageEvent.eventType} in (${USAGE_EVENT_TYPE.ai_invoice_extraction_ok}, ${USAGE_EVENT_TYPE.ai_invoice_extraction_failed})`,
+          inArray(UsageEvent.eventType, [
+            USAGE_EVENT_TYPE.ai_invoice_extraction_ok,
+            USAGE_EVENT_TYPE.ai_invoice_extraction_failed,
+          ]),
         ),
       )
       .groupBy(UsageEvent.tenant_id, Tenant.name, UsageEvent.eventType)

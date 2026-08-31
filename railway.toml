@@ -10,6 +10,10 @@ builder = "nixpacks"
 preDeployCommand = "npm run migrate:deploy"
 startCommand = "npm run start:prod"
 healthcheckPath = "/health"
-healthcheckTimeout = 10
+# 10s was too tight — a cold `tsx ./src` start esbuild-compiles the whole
+# app and intermittently answers /health after >10s, which failed the
+# healthcheck and the whole deploy (roughly every other deploy). 300s is
+# Railway's own default.
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5

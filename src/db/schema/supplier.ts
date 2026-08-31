@@ -22,6 +22,8 @@ export const Supplier = pgTable(
       .notNull()
       .default("PRIMARY"),
     preferred_order_method: varchar("preferred_order_method", { length: 20 }),
+    // ISO 4217 code this supplier bills in. NULL = use the tenant default.
+    currency: varchar("currency", { length: 3 }),
     notes: text(),
     tenant_id: uuid("tenant_id")
       .notNull()

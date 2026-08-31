@@ -158,6 +158,16 @@ export const confirmInvoiceProcedure = adminMutation
           .where(and(eq(PurchaseOrder.id, invoice.matched_purchase_order_id), eq(PurchaseOrder.tenant_id, ctx.tenantId!)))
           .for("update")
 
+        // Never fold an invoice total into a PO recorded in a different
+        // currency — that would silently corrupt the PO's total. The
+        // reviewer has to unmatch or fix the currencies first.
+        if (po && po.currency && invoice.currency && po.currency !== invoice.currency) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `This invoice is in ${invoice.currency} but PO #${po.po_number || po.id.slice(0, 8)} is in ${po.currency}. Unmatch the PO or align the currencies before confirming.`,
+          })
+        }
+
         const isReceivable =
           po && (po.status === ORDER_STATUS.ordered || po.status === ORDER_STATUS.partiallyReceived)
 

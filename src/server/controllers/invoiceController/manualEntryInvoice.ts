@@ -9,6 +9,7 @@ import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
 import { lineTotalWithDiscount } from "../../../utils/discountMath.ts"
+import { resolveInvoiceCurrency } from "../../../utils/resolveCurrency.ts"
 
 const manualItemSchema = z.object({
   description: z.string().min(1, "Description is required"),
@@ -48,6 +49,7 @@ export const manualEntryInvoiceProcedure = adminMutation
       newSupplier: newSupplierSchema.optional(),
       purchaseOrderId: z.string().uuid().nullable().optional(),
       invoiceNumber: z.string().optional(),
+      currency: z.string().max(8).optional(),
       subtotal: z.number().optional(),
       taxAmount: z.number().optional(),
       total: z.number().optional(),
@@ -167,12 +169,19 @@ export const manualEntryInvoiceProcedure = adminMutation
         })),
       )
 
+      const currency = await resolveInvoiceCurrency(
+        tenantId,
+        input.currency ?? invoice.currency,
+        matchedSupplierId,
+      )
+
       await tx
         .update(Invoice)
         .set({
           matched_supplier_id: matchedSupplierId,
           matched_purchase_order_id: matchedPurchaseOrderId,
           invoice_number: input.invoiceNumber ?? invoice.invoice_number ?? null,
+          currency,
           subtotal: input.subtotal ?? null,
           tax_amount: input.taxAmount ?? null,
           total: input.total ?? null,

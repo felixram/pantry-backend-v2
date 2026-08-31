@@ -5,8 +5,10 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { Product } from "../../../db/schema/product.ts";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
+import { Supplier } from "../../../db/schema/supplier.ts";
 import { InventoryCountSession } from "../../../db/schema/inventoryCountSession.ts";
 import { generatePONumber } from "../../../utils/generatePONumber.ts";
+import { getTenantDefaultCurrency } from "../../../utils/resolveCurrency.ts";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { hasElevatedRole } from "../../../types/user.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
@@ -72,6 +74,7 @@ export const createSuggestedPOs = authedMutation
 
       const results: Array<{ purchaseOrderId: string; poNumber: string; supplierId: string }> = [];
       const skippedSupplierIds: string[] = [];
+      const tenantDefaultCurrency = await getTenantDefaultCurrency(ctx.tenantId!);
 
       for (const order of input.orders) {
         if (alreadyOrderedSupplierIds.has(order.supplier_id)) {
@@ -94,6 +97,11 @@ export const createSuggestedPOs = authedMutation
 
         const poNumber = await generatePONumber(ctx.tenantId!);
 
+        const supplier = await tx.query.Supplier.findFirst({
+          where: and(eq(Supplier.id, order.supplier_id), eq(Supplier.tenant_id, ctx.tenantId!)),
+          columns: { currency: true },
+        });
+
         const [newPO] = await tx
           .insert(PurchaseOrder)
           .values({
@@ -101,6 +109,7 @@ export const createSuggestedPOs = authedMutation
             supplier_id: order.supplier_id,
             destination_location_id: input.location_id,
             status: initialStatus,
+            currency: supplier?.currency || tenantDefaultCurrency,
             tenant_id: ctx.tenantId!,
             source_count_session_id: input.session_id,
           })

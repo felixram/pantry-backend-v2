@@ -4,17 +4,20 @@ import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { Supplier } from "../../../db/schema/supplier.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
-import { eq, and, gte, isNull } from "drizzle-orm";
+import { eq, and, gte, isNull, or, count } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { getLocationFilter } from "../../../utils/locationFilter.ts";
 import { calculateSubtotal } from "../../../utils/poTotals.ts";
 import { roundToCent } from "../../../utils/money.ts";
+import { getTenantDefaultCurrency } from "../../../utils/resolveCurrency.ts";
+import { normalizeCurrency } from "../../../types/currency.ts";
 
 export const supplierPerformance = strictAdminProcedure
   .input(
     z.object({
       supplier_id: z.string().optional(),
       location_id: z.string().optional(),
+      currency: z.string().optional(), // defaults to the tenant's default currency
       period: z.enum(["week", "month", "quarter", "year"]).default("month"),
       limit: z.number().min(1).max(500).default(100),
       offset: z.number().min(0).default(0),
@@ -63,6 +66,30 @@ export const supplierPerformance = strictAdminProcedure
     if (locationFilter) {
       conditions.push(eq(PurchaseOrder.destination_location_id, locationFilter));
     }
+
+    // Currency: never sum across currencies. Default to the tenant default;
+    // NULL on legacy rows counts as that default.
+    const tenantDefaultCurrency = await getTenantDefaultCurrency(ctx.tenantId);
+    const selectedCurrency = normalizeCurrency(input.currency) ?? tenantDefaultCurrency;
+
+    const currencyBreakdown = await ctx.db
+      .select({ currency: PurchaseOrder.currency, n: count(PurchaseOrder.id) })
+      .from(PurchaseOrder)
+      .where(and(...conditions))
+      .groupBy(PurchaseOrder.currency);
+
+    const availableCurrencies = [
+      ...new Set(currencyBreakdown.map((r) => r.currency || tenantDefaultCurrency)),
+    ].sort();
+    const excludedCount = currencyBreakdown
+      .filter((r) => (r.currency || tenantDefaultCurrency) !== selectedCurrency)
+      .reduce((sum, r) => sum + Number(r.n), 0);
+
+    conditions.push(
+      selectedCurrency === tenantDefaultCurrency
+        ? or(eq(PurchaseOrder.currency, selectedCurrency), isNull(PurchaseOrder.currency))!
+        : eq(PurchaseOrder.currency, selectedCurrency),
+    );
 
     const orders = await ctx.db.query.PurchaseOrder.findMany({
       where: and(...conditions),
@@ -128,6 +155,9 @@ export const supplierPerformance = strictAdminProcedure
       date_from: dateFrom.toISOString(),
       date_to: now.toISOString(),
       suppliers: performance,
+      currency: selectedCurrency,
+      available_currencies: availableCurrencies,
+      excluded_count: excludedCount,
       pagination: {
         limit: input.limit,
         offset: input.offset,

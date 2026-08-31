@@ -9,6 +9,7 @@ import { eq, sql, and, isNull } from "drizzle-orm";
 import { getLocationFilter } from "../../../utils/locationFilter.ts";
 import { TRPCError } from "@trpc/server";
 import { getBaseUnitCost, findBaseUnit, findUnit } from "../../../utils/unitConversion.ts";
+import { getTenantDefaultCurrency } from "../../../utils/resolveCurrency.ts";
 
 export const inventoryValuation = strictAdminProcedure
   .input(
@@ -173,6 +174,7 @@ export const inventoryValuation = strictAdminProcedure
     return {
       total_items: stocks.length,
       total_value: totalValue,
+      currency: await getTenantDefaultCurrency(ctx.tenantId),
       by_location: locationArray,
       by_category: categoryArray,
       by_product: productArray,

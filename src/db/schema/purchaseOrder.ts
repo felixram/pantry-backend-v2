@@ -25,6 +25,9 @@ export const PurchaseOrder = pgTable(
     subtotal: real("subtotal"),
     tax_amount: real("tax_amount"),
     total: real("total"),
+    // ISO 4217 code, snapshotted from the supplier (or tenant default) when
+    // the PO is created. NULL on legacy rows = tenant default.
+    currency: varchar("currency", { length: 3 }),
     is_unlocked: boolean("is_unlocked").notNull().default(false),
     unlocked_by: uuid("unlocked_by").references(() => User.id),
     unlocked_at: timestamp("unlocked_at", { withTimezone: true }),

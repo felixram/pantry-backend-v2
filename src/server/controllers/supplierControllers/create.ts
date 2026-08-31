@@ -2,6 +2,7 @@ import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { Supplier } from "../../../db/schema/supplier.ts"
 import { TRPCError } from "@trpc/server"
+import { normalizeCurrency } from "../../../types/currency.ts"
 
 // adminMutation (elevated role) — suppliers are shared reference data;
 // mutating them moved out of authedMutation so USER can no longer
@@ -22,6 +23,8 @@ export const createSupplierProcedure = adminMutation
       preferred_order_method: z
         .enum(["EMAIL", "PHONE", "WEBSITE", "IN_PERSON", "FAX", "OTHER"])
         .optional(),
+      // ISO 4217, or "" / omitted to inherit the tenant default.
+      currency: z.string().max(8).optional(),
       notes: z.string().optional(),
     })
   )
@@ -33,10 +36,12 @@ export const createSupplierProcedure = adminMutation
       })
     }
 
+    const { currency, ...rest } = input
     const [supplier] = await ctx.db
       .insert(Supplier)
       .values({
-        ...input,
+        ...rest,
+        currency: currency ? normalizeCurrency(currency) : null,
         tenant_id: ctx.tenantId,
       })
       .returning()

@@ -335,6 +335,7 @@ export async function sendInvoiceReceivedNotification(params: {
   hasUnmatchedItems: boolean
   hasDiscrepancies: boolean
   matchedSupplier: boolean
+  currency?: string
 }): Promise<void> {
   const {
     tenantId,
@@ -344,6 +345,7 @@ export async function sendInvoiceReceivedNotification(params: {
     itemCount,
     hasUnmatchedItems,
     hasDiscrepancies,
+    currency,
   } = params
 
   const clientUrl = process.env.CLIENT_URL ?? "http://localhost:5173"
@@ -380,6 +382,7 @@ export async function sendInvoiceReceivedNotification(params: {
     hasUnmatchedItems,
     hasDiscrepancies,
     reviewUrl,
+    currency,
   }
 
   await Promise.all(

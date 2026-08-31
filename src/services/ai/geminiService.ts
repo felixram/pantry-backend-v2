@@ -5,9 +5,22 @@ import {
   isLineTotalConsistent,
 } from "../../utils/discountMath.ts";
 import { recordUsageEvent } from "../usage/recordUsageEvent.ts";
-import { USAGE_EVENT_TYPE } from "../../types/usage.ts";
+import { USAGE_EVENT_TYPE, type AiExtractionErrorType } from "../../types/usage.ts";
 
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
+
+/**
+ * Bucket a Gemini extraction error for the owner console's reliability
+ * panel. Mirrors the retryable-substring checks used inside the retry loop.
+ */
+export function classifyExtractionError(err: unknown): AiExtractionErrorType {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("429") || message.includes("RESOURCE_EXHAUSTED")) return "RATE_LIMIT";
+  if (message.includes("503")) return "UNAVAILABLE";
+  if (message.toLowerCase().includes("empty response")) return "EMPTY_RESPONSE";
+  if (err instanceof SyntaxError || message.includes("JSON")) return "PARSE_ERROR";
+  return "OTHER";
+}
 
 let genAI: GoogleGenAI | null = null;
 
@@ -146,6 +159,25 @@ export async function extractInvoiceData(
 
   let lastError: Error | null = null;
 
+  // One outcome row per call (quantity 1), separate from the per-attempt
+  // token rows below — feeds the owner console's AI-reliability panel.
+  const emitOutcome = async (
+    outcome: "ok" | "failed",
+    attempts: number,
+    extra: Record<string, unknown>,
+  ): Promise<void> => {
+    if (!tenantId) return;
+    await recordUsageEvent({
+      tenantId,
+      eventType:
+        outcome === "ok"
+          ? USAGE_EVENT_TYPE.ai_invoice_extraction_ok
+          : USAGE_EVENT_TYPE.ai_invoice_extraction_failed,
+      quantity: 1,
+      metadata: { model: GEMINI_MODEL, attempts, ...extra },
+    });
+  };
+
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fullPrompt = supplierContext
@@ -249,6 +281,7 @@ export async function extractInvoiceData(
         "Invoice data extracted successfully",
       );
 
+      await emitOutcome("ok", attempt + 1, { confidence: parsed.confidence });
       return parsed;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -261,6 +294,10 @@ export async function extractInvoiceData(
         // Non-retryable error — throw immediately regardless of which
         // attempt this is, rather than sleeping through the remaining
         // backoff for an error retrying can never fix.
+        await emitOutcome("failed", attempt + 1, {
+          errorType: classifyExtractionError(lastError),
+          errorMessage: lastError.message.slice(0, 500),
+        });
         throw lastError;
       }
 
@@ -275,5 +312,10 @@ export async function extractInvoiceData(
     }
   }
 
-  throw lastError || new Error("Gemini extraction failed after 3 attempts");
+  const finalError = lastError || new Error("Gemini extraction failed after 3 attempts");
+  await emitOutcome("failed", 3, {
+    errorType: classifyExtractionError(finalError),
+    errorMessage: finalError.message.slice(0, 500),
+  });
+  throw finalError;
 }

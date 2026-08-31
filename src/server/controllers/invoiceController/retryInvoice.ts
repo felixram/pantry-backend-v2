@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm"
+import { and, eq, isNull, sql } from "drizzle-orm"
 import { Invoice } from "../../../db/schema/invoice.ts"
 import { InvoiceItem } from "../../../db/schema/invoiceItem.ts"
 import { INVOICE_STATUS } from "../../../types/invoice.ts"
@@ -44,7 +44,8 @@ export const retryInvoiceProcedure = adminMutation
       .delete(InvoiceItem)
       .where(eq(InvoiceItem.invoice_id, input.invoiceId))
 
-    // Reset to PENDING and clear error
+    // Reset to PENDING and clear error; count the retry so the detail page
+    // can surface the manual-entry fallback once it hits 3.
     await ctx.db
       .update(Invoice)
       .set({
@@ -54,6 +55,7 @@ export const retryInvoiceProcedure = adminMutation
         extraction_confidence: null,
         matched_supplier_id: null,
         matched_purchase_order_id: null,
+        retry_count: sql`${Invoice.retry_count} + 1`,
       })
       .where(eq(Invoice.id, input.invoiceId))
 

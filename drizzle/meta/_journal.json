@@ -498,6 +498,13 @@
       "when": 1787534128846,
       "tag": "0070_petite_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1788191601263,
+      "tag": "0071_wandering_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }

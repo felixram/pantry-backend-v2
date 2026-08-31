@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, real, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core"
+import { boolean, index, integer, jsonb, pgTable, real, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core"
 import { createdAt, deletedAt, id, updatedAt } from "../schemaHelpers.ts"
 import { relations } from "drizzle-orm"
 import { Tenant } from "./tenant.ts"
@@ -35,6 +35,13 @@ export const Invoice = pgTable(
       .notNull()
       .default(INVOICE_STATUS.pending),
     processing_error: text("processing_error"),
+    // How many times an admin has hit "Retry" on this invoice after a
+    // FAILED extraction. The invoice detail page surfaces the manual-entry
+    // fallback once this reaches 3.
+    retry_count: integer("retry_count").notNull().default(0),
+    // True when the line items were keyed in by hand (manualEntryInvoice.ts)
+    // rather than produced by Gemini extraction.
+    manual_entry: boolean("manual_entry").notNull().default(false),
     reviewed_by: uuid("reviewed_by").references(() => User.id),
     reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
     review_notes: text("review_notes"),

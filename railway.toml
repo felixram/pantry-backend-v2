@@ -2,6 +2,10 @@
 builder = "nixpacks"
 
 [deploy]
+# Apply pending drizzle migrations before the new release goes live, so a
+# schema change ships atomically with the code that needs it (Railway runs
+# this once per deploy, after build, before startCommand / traffic switch).
+preDeployCommand = "npm run m"
 startCommand = "npm run start:prod"
 healthcheckPath = "/health"
 healthcheckTimeout = 10

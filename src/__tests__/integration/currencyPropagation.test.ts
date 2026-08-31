@@ -52,7 +52,7 @@ describe("integration | multi-currency propagation", () => {
     const res = await caller(admin!, tenantId).purchaseOrder.createWithItems({
       supplier_id: supplier!.id,
       destination_location_id: location!.id,
-      items: [{ product_id: product!.id, qty: 2, unit_price: 5, unit: "each" }],
+      items: [{ product_id: product!.id, qty: 2, unit_price: 5 }],
     });
 
     const [po] = await db.select().from(PurchaseOrder).where(eq(PurchaseOrder.id, res.purchaseOrderId));
@@ -70,7 +70,7 @@ describe("integration | multi-currency propagation", () => {
     const res = await caller(admin!, tenantId).purchaseOrder.createWithItems({
       supplier_id: supplier!.id,
       destination_location_id: location!.id,
-      items: [{ product_id: product!.id, qty: 1, unit_price: 3, unit: "each" }],
+      items: [{ product_id: product!.id, qty: 1, unit_price: 3 }],
     });
 
     const [po] = await db.select().from(PurchaseOrder).where(eq(PurchaseOrder.id, res.purchaseOrderId));

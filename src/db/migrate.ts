@@ -16,7 +16,13 @@ async function main() {
     throw new Error("DATABASE_URL environment variable is required")
   }
 
-  const sql = postgres(process.env.DATABASE_URL, { max: 1, prepare: false })
+  const sql = postgres(process.env.DATABASE_URL, {
+    max: 1,
+    prepare: false,
+    // The migrator's `CREATE TABLE IF NOT EXISTS __drizzle_migrations` makes
+    // Postgres emit a NOTICE on every run once the table exists — quiet it.
+    onnotice: () => {},
+  })
   try {
     await migrate(drizzle(sql), { migrationsFolder: "./drizzle" })
     console.log("✅ migrations applied")

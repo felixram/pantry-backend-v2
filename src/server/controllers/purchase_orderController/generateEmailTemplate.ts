@@ -2,30 +2,19 @@ import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
+import { User } from "../../../db/schema/users.ts";
 import { and, eq } from "drizzle-orm";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { validatePermission } from "./helpers/permissionMatrix.ts";
 import type { userRoles } from "../../../types/user.ts";
-import {
-  calculateLineTotal,
-  calculateSubtotal,
-} from "../../../utils/poTotals.ts";
-import { formatMoney } from "../../../utils/formatMoney.ts";
-import { getTenantDefaultCurrency } from "../../../utils/resolveCurrency.ts";
 
-// Minimal HTML-entity escaping for interpolated user-editable fields
-// (product/supplier/location names, addresses) — these are user-editable
-// elsewhere in the app, so unescaped interpolation into an HTML email body
-// is a stored-XSS-in-email vector.
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
+/**
+ * Builds a plain-text order request the user can edit before sending. It is
+ * deliberately NOT a full record of the PO: no pricing, no supplier
+ * contact block, no internal status — just what a supplier needs to fulfil
+ * the order (reference number, where to ship, what to send). The frontend
+ * makes the subject + body editable and hands them to a `mailto:` link.
+ */
 export const generateEmailTemplate = authedProcedure
   .input(
     z.object({
@@ -45,6 +34,7 @@ export const generateEmailTemplate = authedProcedure
       with: {
         supplier: true,
         destinationLocation: true,
+        tenant: true,
         purchaseOrderItems: {
           with: {
             product: true,
@@ -73,133 +63,63 @@ export const generateEmailTemplate = authedProcedure
 
     validatePermission(ctx.user!.role as userRoles, purchaseOrder.status, "email_supplier");
 
-    // Calculate total
-    const total = calculateSubtotal(purchaseOrder.purchaseOrderItems);
+    const sender = await ctx.db.query.User.findFirst({
+      where: eq(User.id, ctx.user!.id),
+      columns: { name: true, last_name: true },
+    });
+    const senderName = [sender?.name, sender?.last_name].filter(Boolean).join(" ").trim();
 
-    // Currency this PO is placed in (snapshot on the row; tenant default for legacy rows)
-    const curr = purchaseOrder.currency || (await getTenantDefaultCurrency(ctx.tenantId));
-    const fmt = (n: number) => formatMoney(n, curr);
+    const subject = `Purchase Order ${purchaseOrder.po_number}`;
 
-    // Check if free shipping applies
-    const freeShippingThreshold = purchaseOrder.supplier.free_shipping_minimum || 0;
-    const freeShipping = total >= freeShippingThreshold && freeShippingThreshold > 0;
+    const greetingName = purchaseOrder.supplier.contact_name || purchaseOrder.supplier.name;
 
-    // Generate HTML email
-    const subject = `Purchase Order #${purchaseOrder.po_number} - ${new Date().toLocaleDateString()}`;
+    const loc = purchaseOrder.destinationLocation;
+    const deliverToLines: string[] = [];
+    if (loc) {
+      deliverToLines.push(`Deliver to: ${loc.name}`);
+      if (loc.address) deliverToLines.push(`  ${loc.address}`);
+      const cityLine = [loc.city, [loc.state, loc.postalCode].filter(Boolean).join(" ")]
+        .filter(Boolean)
+        .join(", ");
+      if (cityLine) deliverToLines.push(`  ${cityLine}`);
+    }
 
-    const body = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${subject}</title>
-  <style>
-    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }
-    .header { background-color: #f4f4f4; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
-    .header h2 { margin: 0 0 10px 0; color: #2c3e50; }
-    .info { margin-bottom: 20px; }
-    .info p { margin: 5px 0; }
-    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-    th { background-color: #2c3e50; color: white; }
-    tr:hover { background-color: #f5f5f5; }
-    .total { font-size: 1.2em; font-weight: bold; text-align: right; margin-top: 20px; padding: 10px; background-color: #f4f4f4; }
-    .footer { margin-top: 30px; padding-top: 20px; border-top: 2px solid #2c3e50; font-size: 0.9em; color: #666; }
-    .free-shipping { background-color: #d4edda; color: #155724; padding: 10px; border-radius: 5px; margin-top: 20px; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h2>Purchase Order #${escapeHtml(purchaseOrder.po_number)}</h2>
-    <p>Date: ${new Date(purchaseOrder.createdAt).toLocaleDateString()}</p>
-    <p>Status: ${escapeHtml(purchaseOrder.status)}</p>
-  </div>
+    const itemLines = purchaseOrder.purchaseOrderItems.map((item) => {
+      const name = item.product?.name || "Unknown product";
+      const sku = item.product?.sku ? ` (SKU ${item.product.sku})` : "";
+      const unit = item.unit ? ` ${item.unit}` : "";
+      return `- ${name}${sku} — ${item.qty}${unit}`;
+    });
 
-  <div class="info">
-    <h3>Supplier Information:</h3>
-    <p><strong>${escapeHtml(purchaseOrder.supplier.name)}</strong></p>
-    <p>Contact: ${escapeHtml(purchaseOrder.supplier.contact_name)}</p>
-    <p>Phone: ${escapeHtml(purchaseOrder.supplier.phone || '')}</p>
-    ${purchaseOrder.supplier.email ? `<p>Email: ${escapeHtml(purchaseOrder.supplier.email)}</p>` : ''}
-    ${purchaseOrder.supplier.address ? `<p>Address: ${escapeHtml(purchaseOrder.supplier.address)}</p>` : ''}
-  </div>
-
-  ${purchaseOrder.destinationLocation ? `
-  <div class="info">
-    <h3>Delivery Location:</h3>
-    <p><strong>${escapeHtml(purchaseOrder.destinationLocation.name)}</strong></p>
-    <p>${escapeHtml(purchaseOrder.destinationLocation.address)}</p>
-    ${purchaseOrder.destinationLocation.city ? `<p>${escapeHtml(purchaseOrder.destinationLocation.city)}, ${escapeHtml(purchaseOrder.destinationLocation.state || '')} ${escapeHtml(purchaseOrder.destinationLocation.postalCode || '')}</p>` : ''}
-  </div>
-  ` : ''}
-
-  <div class="info">
-    <h3>Order Details:</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>Product</th>
-          <th>SKU</th>
-          <th>Quantity</th>
-          <th>Unit Price</th>
-          <th>Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${purchaseOrder.purchaseOrderItems.map((item) => {
-          const product = item.product;
-          const itemTotal = calculateLineTotal(item);
-          return `
-        <tr>
-          <td>${escapeHtml(product?.name || 'Unknown Product')}</td>
-          <td>${escapeHtml(product?.sku || 'N/A')}</td>
-          <td>${item.qty}</td>
-          <td>${fmt(item.unit_price || 0)}</td>
-          <td>${fmt(itemTotal)}</td>
-        </tr>
-          `;
-        }).join('')}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="total">
-    <p>Total: ${fmt(total)}</p>
-  </div>
-
-  ${freeShipping ? `
-  <div class="free-shipping">
-    <strong>🎉 Free Shipping Applies!</strong> This order qualifies for free shipping (threshold: ${fmt(freeShippingThreshold)})
-  </div>
-  ` : freeShippingThreshold > 0 ? `
-  <p style="color: #856404; background-color: #fff3cd; padding: 10px; border-radius: 5px;">
-    <strong>Note:</strong> Free shipping available for orders over ${fmt(freeShippingThreshold)} (current: ${fmt(total)})
-  </p>
-  ` : ''}
-
-  ${purchaseOrder.supplier.delivery_days ? `
-  <p><strong>Delivery Days:</strong> ${escapeHtml(purchaseOrder.supplier.delivery_days)}</p>
-  ` : ''}
-
-  <div class="footer">
-    <p>Thank you for your service!</p>
-    <p>Please confirm receipt of this purchase order and provide an estimated delivery date.</p>
-    <p><em>This is an automated email template. Please review before sending.</em></p>
-  </div>
-</body>
-</html>
-    `.trim();
+    const body = [
+      `Hi ${greetingName},`,
+      ``,
+      `We'd like to place the following order:`,
+      ``,
+      `PO Number: ${purchaseOrder.po_number}`,
+      `Order Date: ${new Date(purchaseOrder.createdAt).toLocaleDateString()}`,
+      ...(deliverToLines.length ? ["", ...deliverToLines] : []),
+      ``,
+      `Items:`,
+      ...itemLines,
+      ``,
+      `Please confirm you can fulfil this order and let us know the estimated delivery date.`,
+      ``,
+      `Thank you,`,
+      ...(senderName ? [senderName] : []),
+      purchaseOrder.tenant?.name ?? "",
+    ]
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
 
     return {
-      to: purchaseOrder.supplier.email || '',
+      to: purchaseOrder.supplier.email || "",
       subject,
       body,
       metadata: {
         order_id: purchaseOrder.id,
-        total,
         items_count: purchaseOrder.purchaseOrderItems.length,
-        free_shipping: freeShipping,
       },
     };
   });

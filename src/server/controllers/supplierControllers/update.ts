@@ -23,6 +23,9 @@ export const updateSupplierProcedure = adminMutation
         .optional(),
       // ISO 4217, or "" to clear back to the tenant default.
       currency: z.string().max(8).optional(),
+      // Reusable order-email body (with {{placeholders}}). "" / null clears
+      // it back to the built-in default.
+      email_template: z.string().max(20000).nullable().optional(),
       notes: z.string().optional(),
     })
   )
@@ -67,6 +70,8 @@ export const updateSupplierProcedure = adminMutation
     if (input.notes !== undefined) updatedData.notes = input.notes
     if (input.currency !== undefined)
       updatedData.currency = input.currency ? normalizeCurrency(input.currency) : null
+    if (input.email_template !== undefined)
+      updatedData.email_template = input.email_template?.trim() || null
 
     if (Object.keys(updatedData).length === 0) {
       return { message: "Nothing to update." }

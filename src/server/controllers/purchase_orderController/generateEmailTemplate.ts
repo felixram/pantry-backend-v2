@@ -9,12 +9,29 @@ import { validatePermission } from "./helpers/permissionMatrix.ts";
 import type { userRoles } from "../../../types/user.ts";
 
 /**
- * Builds a plain-text order request the user can edit before sending. It is
- * deliberately NOT a full record of the PO: no pricing, no supplier
- * contact block, no internal status — just what a supplier needs to fulfil
- * the order (reference number, where to ship, what to send). The frontend
- * makes the subject + body editable and hands them to a `mailto:` link.
+ * Built-in order-email body, used when the supplier has no saved template.
+ * `{{placeholders}}` are filled in per-PO by the frontend at send time —
+ * see the `values` map returned below. Deliberately excludes pricing, the
+ * supplier contact block, and internal PO status.
  */
+export const DEFAULT_ORDER_EMAIL_TEMPLATE = `Hi {{supplier_contact}},
+
+We'd like to place the following order:
+
+PO Number: {{po_number}}
+Order Date: {{order_date}}
+
+{{deliver_to}}
+
+Items:
+{{items}}
+
+Please confirm you can fulfil this order and let us know the estimated delivery date.
+
+Thank you,
+{{sender_name}}
+{{org_name}}`;
+
 export const generateEmailTemplate = authedProcedure
   .input(
     z.object({
@@ -69,10 +86,6 @@ export const generateEmailTemplate = authedProcedure
     });
     const senderName = [sender?.name, sender?.last_name].filter(Boolean).join(" ").trim();
 
-    const subject = `Purchase Order ${purchaseOrder.po_number}`;
-
-    const greetingName = purchaseOrder.supplier.contact_name || purchaseOrder.supplier.name;
-
     const loc = purchaseOrder.destinationLocation;
     const deliverToLines: string[] = [];
     if (loc) {
@@ -84,42 +97,35 @@ export const generateEmailTemplate = authedProcedure
       if (cityLine) deliverToLines.push(`  ${cityLine}`);
     }
 
-    const itemLines = purchaseOrder.purchaseOrderItems.map((item) => {
-      const name = item.product?.name || "Unknown product";
-      const sku = item.product?.sku ? ` (SKU ${item.product.sku})` : "";
-      const unit = item.unit ? ` ${item.unit}` : "";
-      return `- ${name}${sku} — ${item.qty}${unit}`;
-    });
-
-    const body = [
-      `Hi ${greetingName},`,
-      ``,
-      `We'd like to place the following order:`,
-      ``,
-      `PO Number: ${purchaseOrder.po_number}`,
-      `Order Date: ${new Date(purchaseOrder.createdAt).toLocaleDateString()}`,
-      ...(deliverToLines.length ? ["", ...deliverToLines] : []),
-      ``,
-      `Items:`,
-      ...itemLines,
-      ``,
-      `Please confirm you can fulfil this order and let us know the estimated delivery date.`,
-      ``,
-      `Thank you,`,
-      ...(senderName ? [senderName] : []),
-      purchaseOrder.tenant?.name ?? "",
-    ]
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    const items = purchaseOrder.purchaseOrderItems
+      .map((item) => {
+        const name = item.product?.name || "Unknown product";
+        const sku = item.product?.sku ? ` (SKU ${item.product.sku})` : "";
+        const unit = item.unit ? ` ${item.unit}` : "";
+        return `- ${name}${sku} — ${item.qty}${unit}`;
+      })
+      .join("\n");
 
     return {
       to: purchaseOrder.supplier.email || "",
-      subject,
-      body,
-      metadata: {
-        order_id: purchaseOrder.id,
-        items_count: purchaseOrder.purchaseOrderItems.length,
+      subject: `Purchase Order ${purchaseOrder.po_number}`,
+      supplier_id: purchaseOrder.supplier.id,
+      supplier_name: purchaseOrder.supplier.name,
+      // The editable, reusable body: this supplier's saved template, or the
+      // built-in default. The frontend renders it with `values` and can
+      // save an edited version back via supplier.update.
+      template: purchaseOrder.supplier.email_template ?? DEFAULT_ORDER_EMAIL_TEMPLATE,
+      defaultTemplate: DEFAULT_ORDER_EMAIL_TEMPLATE,
+      isCustom: !!purchaseOrder.supplier.email_template,
+      values: {
+        supplier_contact: purchaseOrder.supplier.contact_name || purchaseOrder.supplier.name,
+        supplier_name: purchaseOrder.supplier.name,
+        po_number: purchaseOrder.po_number,
+        order_date: new Date(purchaseOrder.createdAt).toLocaleDateString(),
+        deliver_to: deliverToLines.join("\n"),
+        items,
+        sender_name: senderName,
+        org_name: purchaseOrder.tenant?.name ?? "",
       },
     };
   });

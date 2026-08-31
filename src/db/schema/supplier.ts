@@ -24,6 +24,11 @@ export const Supplier = pgTable(
     preferred_order_method: varchar("preferred_order_method", { length: 20 }),
     // ISO 4217 code this supplier bills in. NULL = use the tenant default.
     currency: varchar("currency", { length: 3 }),
+    // Reusable order-email body for this supplier, edited from the PO
+    // "Email Supplier" dialog. Holds {{placeholders}} (items, po_number,
+    // order_date, deliver_to, supplier_contact, sender_name, org_name) that
+    // are filled per-PO at send time. NULL = use the built-in default.
+    email_template: text("email_template"),
     notes: text(),
     tenant_id: uuid("tenant_id")
       .notNull()

@@ -27,6 +27,7 @@ import {
   inArray,
 } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { getTenantDefaultCurrency } from "../../../utils/resolveCurrency.ts";
 import { ROLES } from "../../../types/user.ts";
 import { getLocationFilter } from "../../../utils/locationFilter.ts";
 
@@ -449,6 +450,11 @@ export const dashboardData = authedProcedure
         ?.totalValue ?? 0;
     }
 
+    // The valuation KPI is derived from internal cost prices, so it's
+    // inherently in the tenant's own currency — surface which one for
+    // display formatting.
+    const currency = await getTenantDefaultCurrency(ctx.tenantId);
+
     // Resolve display units for alert items
     const allAlertItems = [...criticalAlerts, ...warningAlerts];
     const alertProductIds = [...new Set(
@@ -493,6 +499,7 @@ export const dashboardData = authedProcedure
     };
 
     return {
+      currency,
       kpis: {
         totalItems,
         totalItemsGrowth,

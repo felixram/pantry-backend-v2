@@ -21,6 +21,7 @@ export const currentProcedure = t.procedure.query(async ({ ctx }) => {
       status: User.status,
       location_id: User.location_id,
       tenantName: Tenant.name,
+      default_currency: Tenant.default_currency,
     })
     .from(User)
     .innerJoin(Tenant, eq(User.tenant_id, Tenant.id))

@@ -505,6 +505,13 @@
       "when": 1788191601263,
       "tag": "0071_wandering_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1788193038538,
+      "tag": "0072_slow_brood",
+      "breakpoints": true
     }
   ]
 }

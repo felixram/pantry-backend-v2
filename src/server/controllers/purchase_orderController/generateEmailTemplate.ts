@@ -10,6 +10,8 @@ import {
   calculateLineTotal,
   calculateSubtotal,
 } from "../../../utils/poTotals.ts";
+import { formatMoney } from "../../../utils/formatMoney.ts";
+import { getTenantDefaultCurrency } from "../../../utils/resolveCurrency.ts";
 
 // Minimal HTML-entity escaping for interpolated user-editable fields
 // (product/supplier/location names, addresses) — these are user-editable
@@ -73,6 +75,10 @@ export const generateEmailTemplate = authedProcedure
 
     // Calculate total
     const total = calculateSubtotal(purchaseOrder.purchaseOrderItems);
+
+    // Currency this PO is placed in (snapshot on the row; tenant default for legacy rows)
+    const curr = purchaseOrder.currency || (await getTenantDefaultCurrency(ctx.tenantId));
+    const fmt = (n: number) => formatMoney(n, curr);
 
     // Check if free shipping applies
     const freeShippingThreshold = purchaseOrder.supplier.free_shipping_minimum || 0;
@@ -149,8 +155,8 @@ export const generateEmailTemplate = authedProcedure
           <td>${escapeHtml(product?.name || 'Unknown Product')}</td>
           <td>${escapeHtml(product?.sku || 'N/A')}</td>
           <td>${item.qty}</td>
-          <td>$${(item.unit_price || 0).toFixed(2)}</td>
-          <td>$${itemTotal.toFixed(2)}</td>
+          <td>${fmt(item.unit_price || 0)}</td>
+          <td>${fmt(itemTotal)}</td>
         </tr>
           `;
         }).join('')}
@@ -159,16 +165,16 @@ export const generateEmailTemplate = authedProcedure
   </div>
 
   <div class="total">
-    <p>Total: $${total.toFixed(2)}</p>
+    <p>Total: ${fmt(total)}</p>
   </div>
 
   ${freeShipping ? `
   <div class="free-shipping">
-    <strong>🎉 Free Shipping Applies!</strong> This order qualifies for free shipping (threshold: $${freeShippingThreshold.toFixed(2)})
+    <strong>🎉 Free Shipping Applies!</strong> This order qualifies for free shipping (threshold: ${fmt(freeShippingThreshold)})
   </div>
   ` : freeShippingThreshold > 0 ? `
   <p style="color: #856404; background-color: #fff3cd; padding: 10px; border-radius: 5px;">
-    <strong>Note:</strong> Free shipping available for orders over $${freeShippingThreshold.toFixed(2)} (current: $${total.toFixed(2)})
+    <strong>Note:</strong> Free shipping available for orders over ${fmt(freeShippingThreshold)} (current: ${fmt(total)})
   </p>
   ` : ''}
 

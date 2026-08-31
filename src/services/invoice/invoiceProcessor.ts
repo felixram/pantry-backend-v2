@@ -13,6 +13,7 @@ import { matchAllTaxRates } from "./taxRateMatcher.ts"
 import { matchPurchaseOrder, calculateItemDiscrepancies } from "./poMatcher.ts"
 import type { InvoiceLineForMatching } from "./poMatcher.ts"
 import { sendInvoiceReceivedNotification, sendInvoiceAcknowledgmentEmail } from "../email/emailService.ts"
+import { resolveInvoiceCurrency } from "../../utils/resolveCurrency.ts"
 import { logger } from "../../utils/logger.ts"
 
 /**
@@ -96,9 +97,17 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
     // 4. Match supplier
     const supplierMatch = await matchSupplier(db, invoice.tenant_id, extracted, invoice.from_email)
 
+    // Resolve currency now that the supplier is known: the document's own
+    // currency wins, then the matched supplier's, then the tenant default.
+    const resolvedCurrency = await resolveInvoiceCurrency(
+      invoice.tenant_id,
+      extracted.currency,
+      supplierMatch.supplierId
+    )
+
     await db
       .update(Invoice)
-      .set({ matched_supplier_id: supplierMatch.supplierId })
+      .set({ matched_supplier_id: supplierMatch.supplierId, currency: resolvedCurrency })
       .where(and(eq(Invoice.id, invoiceId), eq(Invoice.tenant_id, tenantId)))
 
     // 5. Match products
@@ -208,6 +217,7 @@ export async function processInvoice(invoiceId: string, tenantId: string): Promi
         hasUnmatchedItems: hasUnmatched,
         hasDiscrepancies,
         matchedSupplier: supplierMatch.supplierId !== null,
+        currency: resolvedCurrency,
       })
     } catch (emailError) {
       // Don't fail the whole process if notification fails

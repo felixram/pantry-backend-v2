@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm"
 import { adminMutation } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
+import { normalizeCurrency } from "../../../types/currency.ts"
 
 export const updateSupplierProcedure = adminMutation
   .input(
@@ -20,6 +21,8 @@ export const updateSupplierProcedure = adminMutation
       preferred_order_method: z
         .enum(["EMAIL", "PHONE", "WEBSITE", "IN_PERSON", "FAX", "OTHER"])
         .optional(),
+      // ISO 4217, or "" to clear back to the tenant default.
+      currency: z.string().max(8).optional(),
       notes: z.string().optional(),
     })
   )
@@ -62,6 +65,8 @@ export const updateSupplierProcedure = adminMutation
     if (input.preferred_order_method !== undefined)
       updatedData.preferred_order_method = input.preferred_order_method
     if (input.notes !== undefined) updatedData.notes = input.notes
+    if (input.currency !== undefined)
+      updatedData.currency = input.currency ? normalizeCurrency(input.currency) : null
 
     if (Object.keys(updatedData).length === 0) {
       return { message: "Nothing to update." }

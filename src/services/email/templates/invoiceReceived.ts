@@ -1,3 +1,5 @@
+import { formatMoney } from "../../../utils/formatMoney.ts"
+
 export interface InvoiceReceivedTemplateParams {
   supplierName: string
   invoiceTotal: number
@@ -5,10 +7,11 @@ export interface InvoiceReceivedTemplateParams {
   hasUnmatchedItems: boolean
   hasDiscrepancies: boolean
   reviewUrl: string
+  currency?: string | undefined
 }
 
 export function getInvoiceReceivedEmailHtml(params: InvoiceReceivedTemplateParams): string {
-  const { supplierName, invoiceTotal, itemCount, hasUnmatchedItems, hasDiscrepancies, reviewUrl } = params
+  const { supplierName, invoiceTotal, itemCount, hasUnmatchedItems, hasDiscrepancies, reviewUrl, currency } = params
 
   const warnings: string[] = []
   if (hasUnmatchedItems) warnings.push("Some items could not be matched to products")
@@ -43,7 +46,7 @@ export function getInvoiceReceivedEmailHtml(params: InvoiceReceivedTemplateParam
           </tr>
           <tr>
             <td style="color:#94a3b8;padding:4px 0;">Total</td>
-            <td style="color:#e2e8f0;text-align:right;padding:4px 0;font-weight:600;">$${invoiceTotal.toFixed(2)}</td>
+            <td style="color:#e2e8f0;text-align:right;padding:4px 0;font-weight:600;">${formatMoney(invoiceTotal, currency)}</td>
           </tr>
           <tr>
             <td style="color:#94a3b8;padding:4px 0;">Items</td>
@@ -70,12 +73,12 @@ export function getInvoiceReceivedEmailHtml(params: InvoiceReceivedTemplateParam
 }
 
 export function getInvoiceReceivedEmailText(params: InvoiceReceivedTemplateParams): string {
-  const { supplierName, invoiceTotal, itemCount, hasUnmatchedItems, hasDiscrepancies, reviewUrl } = params
+  const { supplierName, invoiceTotal, itemCount, hasUnmatchedItems, hasDiscrepancies, reviewUrl, currency } = params
 
   let text = `New Invoice Received\n\n`
   text += `A new invoice from ${supplierName} has been processed.\n\n`
   text += `Supplier: ${supplierName}\n`
-  text += `Total: $${invoiceTotal.toFixed(2)}\n`
+  text += `Total: ${formatMoney(invoiceTotal, currency)}\n`
   text += `Items: ${itemCount}\n\n`
 
   if (hasUnmatchedItems) text += `⚠️ Some items could not be matched to products\n`

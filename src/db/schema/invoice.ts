@@ -27,6 +27,9 @@ export const Invoice = pgTable(
     original_file_name: text("original_file_name"),
     original_file_type: text("original_file_type"),
     invoice_number: text("invoice_number"),
+    // ISO 4217 code. Resolved at processing time from the extracted
+    // document currency, then the matched supplier, then the tenant default.
+    currency: varchar("currency", { length: 3 }),
     extracted_data: jsonb("extracted_data"),
     extraction_confidence: real("extraction_confidence"),
     matched_supplier_id: uuid("matched_supplier_id").references(() => Supplier.id),

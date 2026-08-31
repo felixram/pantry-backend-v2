@@ -5,7 +5,9 @@ import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
+import { Supplier } from "../../../db/schema/supplier.ts";
 import { generatePONumber } from "../../../utils/generatePONumber.ts";
+import { getTenantDefaultCurrency } from "../../../utils/resolveCurrency.ts";
 import { validateLocationAccess } from "../../../utils/locationFilter.ts";
 import { hasElevatedRole } from "../../../types/user.ts";
 import { ORDER_STATUS } from "../../../types/orders.ts";
@@ -72,6 +74,19 @@ export const createPurchaseOrderWithItems = authedMutation
         });
       }
 
+      // Snapshot the currency this PO is placed in: the supplier's, else
+      // the tenant default. Frozen on the row so a later supplier-currency
+      // change doesn't retroactively relabel historical orders.
+      const supplier = await tx.query.Supplier.findFirst({
+        where: and(
+          eq(Supplier.id, input.supplier_id),
+          eq(Supplier.tenant_id, ctx.tenantId!)
+        ),
+        columns: { currency: true },
+      });
+      const currency =
+        supplier?.currency || (await getTenantDefaultCurrency(ctx.tenantId!));
+
       // Generate PO number
       const poNumber = await generatePONumber(ctx.tenantId!);
 
@@ -90,6 +105,7 @@ export const createPurchaseOrderWithItems = authedMutation
           supplier_id: input.supplier_id,
           destination_location_id: input.destination_location_id,
           status: initialStatus,
+          currency,
           tenant_id: ctx.tenantId!,
         })
         .returning();

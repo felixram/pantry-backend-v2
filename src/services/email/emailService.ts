@@ -1,4 +1,3 @@
-import { getResendClient, getFromEmail } from "./resendClient.ts"
 import {
   getInvitationEmailHtml,
   getInvitationEmailText,
@@ -29,14 +28,23 @@ import { Tenant } from "../../db/schema/tenant.ts"
 import { eq, and, isNull } from "drizzle-orm"
 import { hasElevatedRole } from "../../types/user.ts"
 import { STATUS } from "../../types/user.ts"
-import { recordUsageEvent } from "../usage/recordUsageEvent.ts"
-import { USAGE_EVENT_TYPE } from "../../types/usage.ts"
+import { logger } from "../../utils/logger.ts"
+import { enqueueEmail } from "./enqueueEmail.ts"
+import { EMAIL_TYPE } from "../../types/email.ts"
 
+// These functions no longer talk to Resend directly — they render a
+// template and drop one row on the email_queue. The worker
+// (emailQueueWorker.ts) sends it within ~1s, paced under the provider's
+// request limit, with retries. `success` here means "accepted onto the
+// queue", not "delivered".
 interface SendEmailResult {
   success: boolean
   messageId?: string
   error?: string
 }
+
+const QUEUED: SendEmailResult = { success: true, messageId: "queued" }
+const QUEUE_FAILED: SendEmailResult = { success: false, error: "Failed to queue email" }
 
 export async function sendInvitationEmail(params: {
   to: string
@@ -48,59 +56,15 @@ export async function sendInvitationEmail(params: {
 }): Promise<SendEmailResult> {
   const { to, userName, inviteUrl, organizationName, expiresAt, tenantId } = params
 
-  const resend = getResendClient()
-  const fromEmail = getFromEmail()
-
-  // Development fallback: log to console if no API key
-  if (!resend) {
-    console.log({
-      type: "email_invitation_dev",
-      to,
-      userName,
-      inviteUrl,
-      message: "Email would be sent (no RESEND_API_KEY configured)",
-    })
-    return { success: true, messageId: "dev-mode" }
-  }
-
-  try {
-    const { data, error } = await resend.emails.send({
-      from: `Vantory <${fromEmail}>`,
-      to: [to],
-      subject: `You're invited to join ${organizationName} on Vantory`,
-      html: getInvitationEmailHtml({
-        userName,
-        inviteUrl,
-        organizationName,
-        expiresAt,
-      }),
-      text: getInvitationEmailText({
-        userName,
-        inviteUrl,
-        organizationName,
-        expiresAt,
-      }),
-    })
-
-    if (error) {
-      console.error({ type: "email_invitation_error", error, to })
-      return { success: false, error: error.message }
-    }
-
-    console.log({ type: "email_invitation_sent", messageId: data?.id, to })
-    if (tenantId) {
-      await recordUsageEvent({
-        tenantId,
-        eventType: USAGE_EVENT_TYPE.email_sent,
-        quantity: 1,
-        metadata: { kind: "invitation", messageId: data?.id },
-      })
-    }
-    return { success: true, messageId: data?.id }
-  } catch (err) {
-    console.error({ type: "email_invitation_exception", error: err, to })
-    return { success: false, error: "Failed to send email" }
-  }
+  const { queued } = await enqueueEmail({
+    to,
+    emailType: EMAIL_TYPE.invitation,
+    tenantId,
+    subject: `You're invited to join ${organizationName} on Vantory`,
+    html: getInvitationEmailHtml({ userName, inviteUrl, organizationName, expiresAt }),
+    text: getInvitationEmailText({ userName, inviteUrl, organizationName, expiresAt }),
+  })
+  return queued ? QUEUED : QUEUE_FAILED
 }
 
 export async function sendPasswordResetEmail(params: {
@@ -112,47 +76,15 @@ export async function sendPasswordResetEmail(params: {
 }): Promise<SendEmailResult> {
   const { to, userName, resetUrl, expiresAt, tenantId } = params
 
-  const resend = getResendClient()
-  const fromEmail = getFromEmail()
-
-  if (!resend) {
-    console.log({
-      type: "email_password_reset_dev",
-      to,
-      resetUrl,
-      message: "Email would be sent (no RESEND_API_KEY configured)",
-    })
-    return { success: true, messageId: "dev-mode" }
-  }
-
-  try {
-    const { data, error } = await resend.emails.send({
-      from: `Vantory <${fromEmail}>`,
-      to: [to],
-      subject: "Reset your Vantory password",
-      html: getPasswordResetEmailHtml({ userName, resetUrl, expiresAt }),
-      text: getPasswordResetEmailText({ userName, resetUrl, expiresAt }),
-    })
-
-    if (error) {
-      console.error({ type: "email_password_reset_error", error, to })
-      return { success: false, error: error.message }
-    }
-
-    console.log({ type: "email_password_reset_sent", messageId: data?.id, to })
-    if (tenantId) {
-      await recordUsageEvent({
-        tenantId,
-        eventType: USAGE_EVENT_TYPE.email_sent,
-        quantity: 1,
-        metadata: { kind: "password_reset", messageId: data?.id },
-      })
-    }
-    return { success: true, messageId: data?.id }
-  } catch (err) {
-    console.error({ type: "email_password_reset_exception", error: err, to })
-    return { success: false, error: "Failed to send email" }
-  }
+  const { queued } = await enqueueEmail({
+    to,
+    emailType: EMAIL_TYPE.password_reset,
+    tenantId,
+    subject: "Reset your Vantory password",
+    html: getPasswordResetEmailHtml({ userName, resetUrl, expiresAt }),
+    text: getPasswordResetEmailText({ userName, resetUrl, expiresAt }),
+  })
+  return queued ? QUEUED : QUEUE_FAILED
 }
 
 export async function sendInventoryCountReminder(params: {
@@ -165,48 +97,18 @@ export async function sendInventoryCountReminder(params: {
 }): Promise<SendEmailResult> {
   const { to, userName, magicLink, orgName, weekIdentifier, tenantId } = params
 
-  const resend = getResendClient()
-  const fromEmail = getFromEmail()
-
-  if (!resend) {
-    console.log({
-      type: "email_inventory_reminder_dev",
-      to,
-      magicLink,
-      weekIdentifier,
-      message: "Email would be sent (no RESEND_API_KEY configured)",
-    })
-    return { success: true, messageId: "dev-mode" }
-  }
-
-  try {
-    const { data, error } = await resend.emails.send({
-      from: `Vantory <${fromEmail}>`,
-      to: [to],
-      subject: `Time for your weekly inventory count – ${weekIdentifier}`,
-      html: getInventoryCountReminderHtml({ userName, magicLink, orgName, weekIdentifier }),
-      text: getInventoryCountReminderText({ userName, magicLink, orgName, weekIdentifier }),
-    })
-
-    if (error) {
-      console.error({ type: "email_inventory_reminder_error", error, to })
-      return { success: false, error: error.message }
-    }
-
-    console.log({ type: "email_inventory_reminder_sent", messageId: data?.id, to })
-    if (tenantId) {
-      await recordUsageEvent({
-        tenantId,
-        eventType: USAGE_EVENT_TYPE.email_sent,
-        quantity: 1,
-        metadata: { kind: "inventory_count_reminder", messageId: data?.id },
-      })
-    }
-    return { success: true, messageId: data?.id }
-  } catch (err) {
-    console.error({ type: "email_inventory_reminder_exception", error: err, to })
-    return { success: false, error: "Failed to send email" }
-  }
+  const { queued } = await enqueueEmail({
+    to,
+    emailType: EMAIL_TYPE.count_reminder,
+    tenantId,
+    // One reminder per (recipient, ISO week) — the cron re-enqueues every
+    // hour but this key makes every attempt after the first a no-op.
+    idempotencyKey: `${EMAIL_TYPE.count_reminder}:${weekIdentifier}:${to.toLowerCase()}`,
+    subject: `Time for your weekly inventory count – ${weekIdentifier}`,
+    html: getInventoryCountReminderHtml({ userName, magicLink, orgName, weekIdentifier }),
+    text: getInventoryCountReminderText({ userName, magicLink, orgName, weekIdentifier }),
+  })
+  return queued ? QUEUED : QUEUE_FAILED
 }
 
 export async function sendInvoiceBounceEmail(params: {
@@ -216,51 +118,19 @@ export async function sendInvoiceBounceEmail(params: {
 }): Promise<SendEmailResult> {
   const { to, inboundAddress, tenantId } = params
 
-  const resend = getResendClient()
-  const fromEmail = getFromEmail()
-
-  if (!resend) {
-    console.log({
-      type: "email_invoice_bounce_dev",
-      to,
-      inboundAddress,
-      message: "Email would be sent (no RESEND_API_KEY configured)",
-    })
-    return { success: true, messageId: "dev-mode" }
-  }
-
-  try {
-    const { data, error } = await resend.emails.send({
-      from: `Vantory <${fromEmail}>`,
-      to: [to],
-      subject: "Invoice not processed — sender not recognized",
-      html: getInvoiceBounceEmailHtml({ senderEmail: to, inboundAddress }),
-      text: getInvoiceBounceEmailText({ senderEmail: to, inboundAddress }),
-    })
-
-    if (error) {
-      console.error({ type: "email_invoice_bounce_error", error, to })
-      return { success: false, error: error.message }
-    }
-
-    console.log({ type: "email_invoice_bounce_sent", messageId: data?.id, to })
-    if (tenantId) {
-      await recordUsageEvent({
-        tenantId,
-        eventType: USAGE_EVENT_TYPE.email_sent,
-        quantity: 1,
-        metadata: { kind: "invoice_bounce", messageId: data?.id },
-      })
-    }
-    return { success: true, messageId: data?.id }
-  } catch (err) {
-    console.error({ type: "email_invoice_bounce_exception", error: err, to })
-    return { success: false, error: "Failed to send email" }
-  }
+  const { queued } = await enqueueEmail({
+    to,
+    emailType: EMAIL_TYPE.invoice_bounce,
+    tenantId,
+    subject: "Invoice not processed — sender not recognized",
+    html: getInvoiceBounceEmailHtml({ senderEmail: to, inboundAddress }),
+    text: getInvoiceBounceEmailText({ senderEmail: to, inboundAddress }),
+  })
+  return queued ? QUEUED : QUEUE_FAILED
 }
 
 /**
- * Send acknowledgment email back to the original sender confirming receipt.
+ * Acknowledgment back to the original sender confirming receipt.
  */
 export async function sendInvoiceAcknowledgmentEmail(params: {
   to: string
@@ -271,60 +141,28 @@ export async function sendInvoiceAcknowledgmentEmail(params: {
 }): Promise<SendEmailResult> {
   const { to, senderName, itemCount, receivedAt, tenantId } = params
 
-  const resend = getResendClient()
-  const fromEmail = getFromEmail()
+  const receivedAtStr = receivedAt.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 
-  if (!resend) {
-    console.log({
-      type: "email_invoice_ack_dev",
-      to,
-      senderName,
-      itemCount,
-      message: "Email would be sent (no RESEND_API_KEY configured)",
-    })
-    return { success: true, messageId: "dev-mode" }
-  }
-
-  try {
-    const receivedAtStr = receivedAt.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    })
-
-    const { data, error } = await resend.emails.send({
-      from: `Vantory <${fromEmail}>`,
-      to: [to],
-      subject: "Your invoice has been received",
-      html: getInvoiceAcknowledgmentEmailHtml({ senderName, itemCount, receivedAt: receivedAtStr }),
-      text: getInvoiceAcknowledgmentEmailText({ senderName, itemCount, receivedAt: receivedAtStr }),
-    })
-
-    if (error) {
-      console.error({ type: "email_invoice_ack_error", error, to })
-      return { success: false, error: error.message }
-    }
-
-    console.log({ type: "email_invoice_ack_sent", messageId: data?.id, to })
-    if (tenantId) {
-      await recordUsageEvent({
-        tenantId,
-        eventType: USAGE_EVENT_TYPE.email_sent,
-        quantity: 1,
-        metadata: { kind: "invoice_acknowledgment", messageId: data?.id },
-      })
-    }
-    return { success: true, messageId: data?.id }
-  } catch (err) {
-    console.error({ type: "email_invoice_ack_exception", error: err, to })
-    return { success: false, error: "Failed to send email" }
-  }
+  const { queued } = await enqueueEmail({
+    to,
+    emailType: EMAIL_TYPE.invoice_acknowledgment,
+    tenantId,
+    subject: "Your invoice has been received",
+    html: getInvoiceAcknowledgmentEmailHtml({ senderName, itemCount, receivedAt: receivedAtStr }),
+    text: getInvoiceAcknowledgmentEmailText({ senderName, itemCount, receivedAt: receivedAtStr }),
+  })
+  return queued ? QUEUED : QUEUE_FAILED
 }
 
 /**
- * Send invoice received notification to all admin/manager users in the tenant.
+ * Fan-out an "invoice received" notification to every active admin/manager
+ * in the tenant — one queue row each, deduped per (invoice, recipient).
  */
 export async function sendInvoiceReceivedNotification(params: {
   tenantId: string
@@ -351,13 +189,8 @@ export async function sendInvoiceReceivedNotification(params: {
   const clientUrl = process.env.CLIENT_URL ?? "http://localhost:5173"
   const reviewUrl = `${clientUrl}/invoices/${invoiceId}`
 
-  // Fetch all admin/manager users in this tenant
   const users = await db
-    .select({
-      email: User.email,
-      name: User.name,
-      role: User.role,
-    })
+    .select({ email: User.email, name: User.name, role: User.role })
     .from(User)
     .innerJoin(Tenant, eq(User.tenant_id, Tenant.id))
     .where(
@@ -369,11 +202,7 @@ export async function sendInvoiceReceivedNotification(params: {
     )
 
   const elevatedUsers = users.filter((u) => hasElevatedRole(u.role))
-
   if (elevatedUsers.length === 0) return
-
-  const resend = getResendClient()
-  const fromEmail = getFromEmail()
 
   const templateParams = {
     supplierName,
@@ -384,37 +213,26 @@ export async function sendInvoiceReceivedNotification(params: {
     reviewUrl,
     currency,
   }
+  const html = getInvoiceReceivedEmailHtml(templateParams)
+  const text = getInvoiceReceivedEmailText(templateParams)
+  const subject = `New invoice received from ${supplierName}`
 
-  await Promise.all(
-    elevatedUsers.map(async (user) => {
-      if (!resend) {
-        console.log({
-          type: "email_invoice_received_dev",
-          to: user.email,
-          supplierName,
-          invoiceTotal,
-          message: "Email would be sent (no RESEND_API_KEY configured)",
-        })
-        return
-      }
+  const results = await Promise.all(
+    elevatedUsers.map((user) =>
+      enqueueEmail({
+        to: user.email,
+        emailType: EMAIL_TYPE.invoice_received,
+        tenantId,
+        idempotencyKey: `${EMAIL_TYPE.invoice_received}:${invoiceId}:${user.email.toLowerCase()}`,
+        subject,
+        html,
+        text,
+      })
+    )
+  )
 
-      try {
-        const { data } = await resend.emails.send({
-          from: `Vantory <${fromEmail}>`,
-          to: [user.email],
-          subject: `New invoice received from ${supplierName}`,
-          html: getInvoiceReceivedEmailHtml(templateParams),
-          text: getInvoiceReceivedEmailText(templateParams),
-        })
-        await recordUsageEvent({
-          tenantId,
-          eventType: USAGE_EVENT_TYPE.email_sent,
-          quantity: 1,
-          metadata: { kind: "invoice_received_notification", messageId: data?.id },
-        })
-      } catch (err) {
-        console.error({ type: "email_invoice_received_error", error: err, to: user.email })
-      }
-    })
+  logger.info(
+    { invoiceId, recipients: elevatedUsers.length, queued: results.filter((r) => r.queued).length },
+    "invoice-received notifications enqueued"
   )
 }

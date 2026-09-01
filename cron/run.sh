@@ -2,9 +2,9 @@
 # Runs hourly via Railway's native cron schedule (see railway.toml). Hits
 # server-v2's own /api/cron/* endpoints over Railway's private network
 # rather than the public domain. Unlike v1 (which only ever wired up
-# inventory-reminder), this activates all five — the other four
-# (product/supplier/category/tax-rate purge) exist in the API but were
-# never actually called by anything in v1 production.
+# inventory-reminder), this activates all of them — the purge jobs exist in
+# the API but were never called by anything in v1 production, and
+# email-queue-sweep backs up the in-process email worker.
 BASE_URL="http://vantory-v2-api.railway.internal:3030"
 
 run_cron() {
@@ -17,3 +17,4 @@ run_cron product-purge
 run_cron supplier-purge
 run_cron category-purge
 run_cron tax-rate-purge
+run_cron email-queue-sweep

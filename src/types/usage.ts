@@ -4,6 +4,9 @@
 export const USAGE_EVENT_TYPE = {
   ai_invoice_extraction: "AI_INVOICE_EXTRACTION",
   email_sent: "EMAIL_SENT",
+  // One row per queued email that exhausted its retries or hit a permanent
+  // provider rejection. Never billed — for delivery-health reporting.
+  email_failed: "EMAIL_FAILED",
   file_storage: "FILE_STORAGE",
   // Outcome signals for AI extraction reliability — exactly one row per
   // extractInvoiceData() call (quantity 1), independent of the per-attempt

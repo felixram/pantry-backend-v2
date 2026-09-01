@@ -21,6 +21,7 @@ import { purgeExpiredDeletedSuppliers } from "./server/controllers/supplierContr
 import { purgeExpiredDeletedCategories } from "./server/controllers/categoryControllers/helpers/purgeExpiredCategories.ts"
 import { purgeExpiredDeletedTaxRates } from "./server/controllers/taxRateControllers/helpers/purgeExpiredTaxRates.ts"
 import { sendInventoryCountReminders } from "./server/controllers/inventoryCountControllers/helpers/sendInventoryCountReminders.ts"
+import { startEmailWorker, stopEmailWorker, sweepEmailQueue } from "./services/email/emailQueueWorker.ts"
 
 dotenv.config()
 
@@ -196,6 +197,29 @@ app.post("/api/cron/tax-rate-purge", async (req, res) => {
   }
 })
 
+// Cron endpoint: called by Railway cron every hour
+// Schedule: 0 * * * *
+// Command: curl -X POST https://your-api.railway.app/api/cron/email-queue-sweep -H "Authorization: Bearer $CRON_SECRET"
+// Safety net for the in-process email worker: reclaims rows abandoned in
+// `processing` (api restarted mid-send) and prunes settled rows past the
+// retention window. The worker also reclaims on every tick — this covers
+// the case where the worker itself is down.
+app.post("/api/cron/email-queue-sweep", async (req, res) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: "Unauthorized" })
+  }
+
+  try {
+    const { reclaimed, pruned } = await sweepEmailQueue()
+    logger.info({ reclaimed, pruned }, "Email queue sweep cron completed")
+    return res.json({ success: true, reclaimed, pruned })
+  } catch (error) {
+    logger.error({ error }, "Cron email-queue-sweep failed")
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
+
 // Manual invoice upload (REST endpoint — multer handles multipart/form-data)
 app.use("/api/invoices", invoiceUploadRouter)
 
@@ -269,6 +293,9 @@ async function start() {
 
   server = app.listen(PORT, () => {
     logger.info({ port: PORT }, "Server listening")
+    // Drain the outbound email queue in-process (1s ticker, paced under
+    // Resend's request limit). No-op when EMAIL_WORKER_ENABLED=false.
+    startEmailWorker()
   })
 }
 
@@ -277,6 +304,9 @@ start()
 // Graceful shutdown
 const gracefulShutdown = async (signal: string) => {
   logger.info({ signal }, "Received shutdown signal, shutting down gracefully...")
+  // Stop claiming new email rows; any in-flight send finishes on its own.
+  // Un-settled `processing` rows are reclaimed on the next boot / cron sweep.
+  stopEmailWorker()
   const closeRest = async () => {
     try {
       await closeDatabase()

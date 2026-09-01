@@ -14,6 +14,7 @@ export async function clearDatabase() {
   testTenantId = null;
 
   // Truncate all tables in correct order (respecting foreign keys)
+  await db.execute(sql`TRUNCATE TABLE email_queue CASCADE`);
   await db.execute(sql`TRUNCATE TABLE usage_event CASCADE`);
   await db.execute(sql`TRUNCATE TABLE invoice_item CASCADE`);
   await db.execute(sql`TRUNCATE TABLE invoice CASCADE`);

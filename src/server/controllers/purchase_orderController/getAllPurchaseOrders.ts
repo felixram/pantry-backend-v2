@@ -1,6 +1,6 @@
 import z from "zod";
 import { authedProcedure } from "../../trpc.ts";
-import { eq, isNull, and, or, ilike, desc, sql } from "drizzle-orm";
+import { eq, isNull, and, or, ilike, desc, sql, inArray } from "drizzle-orm";
 import { PurchaseOrder } from "../../../db/schema/purchaseOrder.ts";
 import { PurchaseOrderItem } from "../../../db/schema/purchaseOrderItem.ts";
 import { Supplier } from "../../../db/schema/supplier.ts";
@@ -29,7 +29,24 @@ export const getAllPuchaseOrders = authedProcedure
         ORDER_STATUS.received,
         ORDER_STATUS.rejected,
         ORDER_STATUS.cancelled,
-      ]).optional(), // Optional status filter
+      ]).optional(), // Single-status filter
+      // Multi-status filter (takes precedence over `status`). Used by the
+      // invoice-review PO picker to offer ORDERED + already-RECEIVED POs.
+      statuses: z
+        .array(
+          z.enum([
+            ORDER_STATUS.draft,
+            ORDER_STATUS.pendingApproval,
+            ORDER_STATUS.approved,
+            ORDER_STATUS.ordered,
+            ORDER_STATUS.partiallyReceived,
+            ORDER_STATUS.received,
+            ORDER_STATUS.rejected,
+            ORDER_STATUS.cancelled,
+          ])
+        )
+        .nonempty()
+        .optional(),
       limit: z.number().optional().default(10),
       offset: z.number().optional().default(0),
       mode: z.enum(["list", "full"]).optional().default("full"),
@@ -61,7 +78,9 @@ export const getAllPuchaseOrders = authedProcedure
       conditions.push(eq(PurchaseOrder.destination_location_id, locationFilter));
     }
 
-    if (input.status) {
+    if (input.statuses?.length) {
+      conditions.push(inArray(PurchaseOrder.status, input.statuses));
+    } else if (input.status) {
       conditions.push(eq(PurchaseOrder.status, input.status));
     }
 

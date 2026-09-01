@@ -145,6 +145,9 @@ export const confirmInvoiceProcedure = adminMutation
 
       // 3. Check if matched to a PO in a receivable status
       let stockSummary: string
+      // True when the matched PO is already RECEIVED — the invoice is
+      // attached for reconciliation only, no stock movement.
+      let isAlreadyReceived = false
 
       if (invoice.matched_purchase_order_id) {
         // Row-locked (not the relational query API, which doesn't support
@@ -170,21 +173,52 @@ export const confirmInvoiceProcedure = adminMutation
 
         const isReceivable =
           po && (po.status === ORDER_STATUS.ordered || po.status === ORDER_STATUS.partiallyReceived)
+        // A PO already RECEIVED can still have its invoice attached — for
+        // the record and price reconciliation — but stock must NOT move
+        // again (it was applied at receipt).
+        isAlreadyReceived = po?.status === ORDER_STATUS.received
 
-        // Any other matched-PO status (RECEIVED, CANCELLED, REJECTED, or not
-        // yet ORDERED) must never silently fall through to a direct stock
-        // update — that would double-count stock a PO already received, or
-        // apply stock against a PO nobody agreed was actually placed/still
-        // open. The reviewer has to actively resolve it: unmatch the PO (a
-        // legitimate standalone purchase) or fix the underlying PO status.
-        if (po && !isReceivable) {
+        // Any other matched-PO status (CANCELLED, REJECTED, or not yet
+        // ORDERED) must never fall through to a stock update — that would
+        // apply stock against a PO nobody agreed was placed/still open. The
+        // reviewer has to resolve it: unmatch the PO (a legitimate
+        // standalone purchase) or fix the underlying PO status.
+        if (po && !isReceivable && !isAlreadyReceived) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: `This invoice is matched to PO #${po.po_number || po.id.slice(0, 8)}, which is ${po.status}. Unmatch the PO to confirm this invoice as a standalone stock update, or resolve the conflict first.`,
           })
         }
 
-        if (po && isReceivable && po.destination_location_id) {
+        if (po && isAlreadyReceived) {
+          // Reconcile only: no stock movement. Fold the invoice's effective
+          // (post-discount) prices into the PO items + PO totals so the PO
+          // reflects what was actually billed. Discrepancy flags on the
+          // invoice items were already computed at match time.
+          const priceByPoItem = new Map<string, number>()
+          for (const item of invoice.items) {
+            if (!item.matched_po_item_id || item.is_out_of_stock) continue
+            if (priceByPoItem.has(item.matched_po_item_id)) continue
+            const unitPrice = item.confirmed_unit_price ?? item.extracted_unit_price ?? 0
+            const discount = item.extracted_discount_percent ?? 0
+            priceByPoItem.set(item.matched_po_item_id, applyDiscount(unitPrice, discount))
+          }
+          for (const [poItemId, effectivePrice] of priceByPoItem) {
+            await tx
+              .update(PurchaseOrderItem)
+              .set({ unit_price: effectivePrice })
+              .where(eq(PurchaseOrderItem.id, poItemId))
+          }
+          await tx
+            .update(PurchaseOrder)
+            .set({
+              subtotal: invoice.subtotal ?? null,
+              tax_amount: invoice.tax_amount ?? null,
+              total: invoice.total ?? null,
+            })
+            .where(eq(PurchaseOrder.id, po.id))
+          stockSummary = `PO #${po.po_number || po.id.slice(0, 8)} was already received — invoice recorded for reconciliation, no stock change.`
+        } else if (po && isReceivable && po.destination_location_id) {
           // Build received items from confirmed invoice items
           // Aggregate qty per PO item, excluding OOS items
           // Also track effective prices (post-discount) per PO item
@@ -424,7 +458,9 @@ export const confirmInvoiceProcedure = adminMutation
         .where(eq(Invoice.id, input.invoiceId))
 
       return {
-        message: "Invoice confirmed and stock updated",
+        message: isAlreadyReceived
+          ? "Invoice confirmed and reconciled against the received PO (no stock change)"
+          : "Invoice confirmed and stock updated",
         stockSummary,
         productsUpdated,
       }

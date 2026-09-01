@@ -18,20 +18,25 @@ async function main() {
 
   const sql = postgres(process.env.DATABASE_URL, {
     max: 1,
-    prepare: false,
-    // The migrator's `CREATE TABLE IF NOT EXISTS __drizzle_migrations` makes
-    // Postgres emit a NOTICE on every run once the table exists — quiet it.
+    // The migrator's `CREATE TABLE IF NOT EXISTS __drizzle_migrations` emits
+    // a NOTICE on every run once the table exists — quiet it.
     onnotice: () => {},
   })
   try {
     await migrate(drizzle(sql), { migrationsFolder: "./drizzle" })
     console.log("✅ migrations applied")
   } finally {
-    await sql.end()
+    await sql.end({ timeout: 5 })
   }
 }
 
-main().catch((err) => {
-  console.error("❌ migration failed:", err)
-  process.exit(1)
-})
+// Explicit exit: this is a one-shot script and the `postgres` pool can keep
+// timers alive briefly after `sql.end()`. Without this the process
+// sometimes lingered, and Railway's preDeploy step waited on it and then
+// failed the whole deploy (~every other deploy).
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error("❌ migration failed:", err)
+    process.exit(1)
+  })

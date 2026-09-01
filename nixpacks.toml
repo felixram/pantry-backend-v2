@@ -1,0 +1,10 @@
+# Neuter the auto-detected build phase. nixpacks runs `npm run build`
+# (= `tsc --noEmit`) when a build script exists, but `typescript` is a
+# devDependency and Railway installs with NODE_ENV=production, so
+# `tsc: not found` failed the build intermittently (cache-dependent).
+# The deploy needs no build step: `start:prod` is `tsx ./src` (compiles at
+# runtime) and the typecheck runs in CI. Install phase (`npm ci`) is left
+# alone — unlike railway.toml's buildCommand, which replaced the whole
+# build and left node_modules missing.
+[phases.build]
+cmds = ["echo 'build skipped — tsx runs TS directly; typecheck is in CI'"]

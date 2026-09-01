@@ -1,12 +1,9 @@
 [build]
 builder = "nixpacks"
-# Skip nixpacks' auto-detected `npm run build` (= `tsc --noEmit`). It needs
-# `typescript`, a devDependency that Railway's NODE_ENV=production install
-# omits, so `tsc: not found` failed the build ~half the time (whenever the
-# nixpacks cache didn't happen to carry it). The deploy doesn't need a
-# build: `start:prod` runs `tsx ./src` (compiles at runtime) and the
-# typecheck already runs in CI.
-buildCommand = "echo 'skip: typecheck runs in CI, runtime is tsx'"
+# The build phase is neutered in nixpacks.toml (skips `tsc --noEmit`, which
+# needs the `typescript` devDep that prod install omits). NOT set here as
+# `buildCommand` — that replaces nixpacks' whole build incl. `npm ci`, so
+# node_modules ended up missing at runtime.
 
 [deploy]
 # Migrations run on boot in src/index.ts (production only) — the Railway

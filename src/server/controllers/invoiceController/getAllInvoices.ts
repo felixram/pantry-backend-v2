@@ -1,6 +1,7 @@
 import { and, eq, isNull, desc, sql, ilike, or } from "drizzle-orm"
 import { Invoice } from "../../../db/schema/invoice.ts"
 import { Location } from "../../../db/schema/location.ts"
+import { Supplier } from "../../../db/schema/supplier.ts"
 import { authedProcedure } from "../../trpc.ts"
 import { z } from "zod"
 import { TRPCError } from "@trpc/server"
@@ -12,6 +13,11 @@ export const getAllInvoicesProcedure = authedProcedure
       status: z.string().optional(),
       search: z.string().optional(),
       locationId: z.string().uuid().optional(),
+      // Scope to one supplier (the "Folders" view expands a supplier group
+      // through this, and the flat list uses it for the "See all" drill-in).
+      supplierId: z.string().uuid().optional(),
+      // Only invoices with no matched supplier — the "Unmatched" folder.
+      unmatched: z.boolean().optional(),
       limit: z.number().optional().default(20),
       offset: z.number().optional().default(0),
     })
@@ -31,6 +37,12 @@ export const getAllInvoicesProcedure = authedProcedure
 
     if (input.status) {
       conditions.push(eq(Invoice.status, input.status))
+    }
+
+    if (input.unmatched) {
+      conditions.push(isNull(Invoice.matched_supplier_id))
+    } else if (input.supplierId) {
+      conditions.push(eq(Invoice.matched_supplier_id, input.supplierId))
     }
 
     // ADMIN can filter by any location or see all; MANAGER/USER are
@@ -72,10 +84,12 @@ export const getAllInvoicesProcedure = authedProcedure
         reviewed_at: Invoice.reviewed_at,
         createdAt: Invoice.createdAt,
         location_name: Location.name,
+        supplier_name: Supplier.name,
         totalCount: sql<number>`COUNT(*) OVER()`.as("total_count"),
       })
       .from(Invoice)
       .leftJoin(Location, eq(Invoice.location_id, Location.id))
+      .leftJoin(Supplier, eq(Invoice.matched_supplier_id, Supplier.id))
       .where(and(...conditions))
       .orderBy(desc(Invoice.createdAt))
       .limit(input.limit)

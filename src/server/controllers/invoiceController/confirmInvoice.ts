@@ -191,24 +191,88 @@ export const confirmInvoiceProcedure = adminMutation
         }
 
         if (po && isAlreadyReceived) {
-          // Reconcile only: no stock movement. Fold the invoice's effective
-          // (post-discount) prices into the PO items + PO totals so the PO
-          // reflects what was actually billed. Discrepancy flags on the
-          // invoice items were already computed at match time.
-          const priceByPoItem = new Map<string, number>()
+          // The PO was already received (stock applied at receipt). Attaching
+          // the invoice reconciles what was actually billed:
+          //  - PO item unit_price  -> invoice's effective (post-discount) price
+          //  - PO item received_qty -> invoice qty; the DELTA vs what was
+          //    previously received is applied to stock (never the full qty —
+          //    no double-count). If receiving already matched the invoice the
+          //    delta is 0 and nothing moves.
+          //  - PO subtotal/tax/total -> invoice's
+          const invoiceQtyByPoItem = new Map<string, number>()
+          const invoicePriceByPoItem = new Map<string, number>()
           for (const item of invoice.items) {
             if (!item.matched_po_item_id || item.is_out_of_stock) continue
-            if (priceByPoItem.has(item.matched_po_item_id)) continue
-            const unitPrice = item.confirmed_unit_price ?? item.extracted_unit_price ?? 0
-            const discount = item.extracted_discount_percent ?? 0
-            priceByPoItem.set(item.matched_po_item_id, applyDiscount(unitPrice, discount))
+            const qty = item.confirmed_qty ?? item.extracted_qty ?? 0
+            invoiceQtyByPoItem.set(
+              item.matched_po_item_id,
+              (invoiceQtyByPoItem.get(item.matched_po_item_id) ?? 0) + qty
+            )
+            if (!invoicePriceByPoItem.has(item.matched_po_item_id)) {
+              const unitPrice = item.confirmed_unit_price ?? item.extracted_unit_price ?? 0
+              const discount = item.extracted_discount_percent ?? 0
+              invoicePriceByPoItem.set(item.matched_po_item_id, applyDiscount(unitPrice, discount))
+            }
           }
-          for (const [poItemId, effectivePrice] of priceByPoItem) {
-            await tx
-              .update(PurchaseOrderItem)
-              .set({ unit_price: effectivePrice })
-              .where(eq(PurchaseOrderItem.id, poItemId))
+
+          const poItems = await tx.query.PurchaseOrderItem.findMany({
+            where: and(
+              eq(PurchaseOrderItem.purchase_order_id, po.id),
+              isNull(PurchaseOrderItem.deletedAt)
+            ),
+          })
+
+          let priceCorrections = 0
+          let qtyCorrections = 0
+          let netStockDelta = 0
+
+          for (const poItem of poItems) {
+            const invoiceQty = invoiceQtyByPoItem.get(poItem.id)
+            if (invoiceQty === undefined) continue // invoice doesn't cover this line
+
+            const effectivePrice = invoicePriceByPoItem.get(poItem.id)
+            const priorReceived = poItem.received_qty ?? 0
+            const qtyDelta = invoiceQty - priorReceived
+
+            const itemUpdate: Record<string, unknown> = { received_qty: invoiceQty }
+            if (effectivePrice != null && Math.abs((poItem.unit_price ?? 0) - effectivePrice) > 0.001) {
+              itemUpdate.unit_price = effectivePrice
+              priceCorrections++
+            }
+            await tx.update(PurchaseOrderItem).set(itemUpdate).where(eq(PurchaseOrderItem.id, poItem.id))
+
+            if (qtyDelta !== 0 && po.destination_location_id) {
+              // Frozen order-time conversion factor; legacy rows (null) => 1.
+              const baseDelta = qtyDelta * (poItem.unit_conversion_factor ?? 1)
+              netStockDelta += baseDelta
+              qtyCorrections++
+
+              await tx
+                .insert(Stock)
+                .values({
+                  location_id: po.destination_location_id,
+                  productId: poItem.product_id,
+                  qty: baseDelta,
+                  minimumStockLevel: 0,
+                  tenant_id: ctx.tenantId!,
+                })
+                .onConflictDoUpdate({
+                  target: [Stock.location_id, Stock.productId],
+                  set: { qty: sql`${Stock.qty} + ${baseDelta}` },
+                })
+
+              await tx.insert(StockMovement).values({
+                product_id: poItem.product_id,
+                location_id: po.destination_location_id,
+                change_qty: baseDelta,
+                movement_type: "PO_RECEIVE",
+                reason: `Invoice #${input.invoiceId} reconciled against received PO #${po.po_number || po.id.slice(0, 8)} — received qty ${priorReceived} → ${invoiceQty}`,
+                user_id: ctx.user!.id,
+                tenant_id: ctx.tenantId!,
+              })
+            }
           }
+
           await tx
             .update(PurchaseOrder)
             .set({
@@ -217,7 +281,18 @@ export const confirmInvoiceProcedure = adminMutation
               total: invoice.total ?? null,
             })
             .where(eq(PurchaseOrder.id, po.id))
-          stockSummary = `PO #${po.po_number || po.id.slice(0, 8)} was already received — invoice recorded for reconciliation, no stock change.`
+
+          const parts: string[] = []
+          if (priceCorrections)
+            parts.push(`${priceCorrections} price correction${priceCorrections === 1 ? "" : "s"}`)
+          if (qtyCorrections)
+            parts.push(
+              `${qtyCorrections} qty correction${qtyCorrections === 1 ? "" : "s"} (${netStockDelta >= 0 ? "+" : ""}${netStockDelta} to stock)`
+            )
+          stockSummary =
+            parts.length > 0
+              ? `PO #${po.po_number || po.id.slice(0, 8)} reconciled: ${parts.join(", ")}.`
+              : `PO #${po.po_number || po.id.slice(0, 8)} was already received and matches the invoice — nothing to reconcile.`
         } else if (po && isReceivable && po.destination_location_id) {
           // Build received items from confirmed invoice items
           // Aggregate qty per PO item, excluding OOS items
@@ -459,7 +534,7 @@ export const confirmInvoiceProcedure = adminMutation
 
       return {
         message: isAlreadyReceived
-          ? "Invoice confirmed and reconciled against the received PO (no stock change)"
+          ? "Invoice confirmed and reconciled against the received PO"
           : "Invoice confirmed and stock updated",
         stockSummary,
         productsUpdated,

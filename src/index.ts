@@ -10,6 +10,7 @@ import { clerkMiddleware } from "@clerk/express"
 import { createContext } from "./server/context.ts"
 import cookieParser from "cookie-parser"
 import { db, closeDatabase } from "./db/index.ts"
+import { runMigrations } from "./db/runMigrations.ts"
 import { sql } from "drizzle-orm"
 import { logger } from "./utils/logger.ts"
 import { handleResendInbound } from "./server/webhooks/resendInboundHandler.ts"
@@ -247,16 +248,36 @@ app.use(
   })
 )
 
-// Start server
-const server = app.listen(PORT, () => {
-  logger.info({ port: PORT }, "Server listening")
-})
+// Start server. In production, apply pending DB migrations first so a
+// schema change ships atomically with the code that needs it — and abort
+// startup if they fail (Railway then keeps the previous release live).
+// Migrating on boot rather than a Railway preDeployCommand: the separate
+// preDeploy container intermittently hung and failed the whole deploy.
+let server: ReturnType<typeof app.listen>
+
+async function start() {
+  if (process.env.NODE_ENV === "production") {
+    logger.info("Applying database migrations...")
+    try {
+      await runMigrations()
+      logger.info("Database migrations up to date")
+    } catch (err) {
+      logger.error({ err }, "Database migrations failed — aborting startup")
+      process.exit(1)
+    }
+  }
+
+  server = app.listen(PORT, () => {
+    logger.info({ port: PORT }, "Server listening")
+  })
+}
+
+start()
 
 // Graceful shutdown
 const gracefulShutdown = async (signal: string) => {
   logger.info({ signal }, "Received shutdown signal, shutting down gracefully...")
-  server.close(async () => {
-    logger.info("HTTP server closed")
+  const closeRest = async () => {
     try {
       await closeDatabase()
       logger.info("Database connection closed")
@@ -264,7 +285,16 @@ const gracefulShutdown = async (signal: string) => {
       logger.error({ error }, "Error closing database")
     }
     process.exit(0)
-  })
+  }
+  // `server` is unset only during the brief boot-time migration window.
+  if (server) {
+    server.close(async () => {
+      logger.info("HTTP server closed")
+      await closeRest()
+    })
+  } else {
+    await closeRest()
+  }
 
   // Force close after 10 seconds
   setTimeout(() => {

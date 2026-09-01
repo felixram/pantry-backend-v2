@@ -41,6 +41,21 @@ export const getAllInvoicesProcedure = authedProcedure
       conditions.push(eq(Invoice.location_id, locationFilter))
     }
 
+    // The single most-recently-received invoice in this location scope,
+    // independent of the status/search filters and pagination — the list
+    // badges this row as "Latest" when it's on the current page.
+    const latestScope = [
+      eq(Invoice.tenant_id, ctx.tenantId),
+      isNull(Invoice.deletedAt),
+      ...(locationFilter ? [eq(Invoice.location_id, locationFilter)] : []),
+    ]
+    const [latest] = await ctx.db
+      .select({ id: Invoice.id })
+      .from(Invoice)
+      .where(and(...latestScope))
+      .orderBy(desc(Invoice.createdAt))
+      .limit(1)
+
     if (input.search) {
       const searchPattern = `%${input.search}%`
       conditions.push(
@@ -83,6 +98,7 @@ export const getAllInvoicesProcedure = authedProcedure
 
     return {
       results,
+      latestInvoiceId: latest?.id ?? null,
       pagination: {
         total: results[0]?.totalCount ?? 0,
         limit: input.limit,

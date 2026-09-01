@@ -4,19 +4,23 @@
 # intermittently. The deploy needs no compile step: `start:prod` is
 # `tsx ./src` (compiles at runtime) and the typecheck runs in CI.
 #
-# This re-runs the install rather than a no-op `echo`: the nixpacks
-# install-layer cache has intermittently been restored incomplete, leaving
-# node_modules short of runtime deps at boot (`Cannot find package
-# '@trpc/server'` — crash loop, healthcheck never passes, deploy FAILED
-# even though the same commit + config had deployed clean minutes before).
+# This re-runs the install (rather than a no-op `echo`) as a safety net:
+# `Cannot find package '@trpc/server'` at boot (crash loop, deploy FAILED)
+# turned out to be caused by @trpc/server + cors genuinely being
+# misclassified as devDependencies while imported at runtime by
+# src/index.ts — Railway's NODE_ENV=production install honors the
+# lockfile's per-package `dev` flag and omits them, non-deterministically
+# with the nixpacks layer cache (matches the earlier `tsc: not found`
+# flakiness exactly). The real fix is the dependencies/devDependencies
+# split in package.json; this step just re-verifies node_modules is
+# complete against the (now-correct) lockfile every deploy.
 #
 # It's `npm install`, NOT `npm ci`: nixpacks mounts a build cache at
 # `/app/node_modules/.cache`, and `npm ci` starts by `rmdir`-ing all of
 # node_modules — which fails EBUSY on that mount (exit 240, build dies).
-# `npm install` reconciles against the lockfile in place: it completes a
-# partial tree without wiping it, so it both repairs the flake and coexists
-# with the cache mount. Idempotent (~seconds) when the tree is already
-# whole. Still NOT railway.toml's buildCommand — that replaces nixpacks'
-# entire build incl. base setup.
+# `npm install` reconciles in place without wiping the tree, so it
+# coexists with the mount. Idempotent (~seconds) once nothing's missing.
+# Still NOT railway.toml's buildCommand — that replaces nixpacks' entire
+# build incl. base setup.
 [phases.build]
 cmds = ["npm install --omit=dev --no-audit --no-fund"]

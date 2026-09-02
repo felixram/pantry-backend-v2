@@ -20,12 +20,21 @@ export const StockMovement = pgTable(
     // always set one of: ADJUSTMENT, TRANSFER_IN, TRANSFER_OUT, PO_RECEIVE,
     // COUNT_ADJUSTMENT, INITIAL.
     movement_type: varchar("movement_type", { length: 20 }),
+    // One of STOCK_ADJUSTMENT_REASON (types/stockAdjustmentReason.ts). Only
+    // set for ADJUSTMENT / COUNT_ADJUSTMENT rows; NULL for the machine
+    // movement types (PO_RECEIVE, TRANSFER_*, INITIAL) and historical rows.
+    reason_code: varchar("reason_code", { length: 24 }),
     reason: text(),
     user_id: uuid().references(() => User.id, { onDelete: "set null" }),
     createdAt,
     deletedAt,
   },
-  (t) => [index().on(t.product_id), index().on(t.location_id), index().on(t.tenant_id)],
+  (t) => [
+    index().on(t.product_id),
+    index().on(t.location_id),
+    index().on(t.tenant_id),
+    index().on(t.reason_code),
+  ],
 );
 
 export const StockMovementRelations = relations(StockMovement, ({ one }) => ({

@@ -111,4 +111,94 @@ describe('integration | stock adjustment: atomic negative-qty guard + concurrent
     const movements = await db.select().from(StockMovement).where(eq(StockMovement.product_id, product!.id));
     expect(movements).toHaveLength(2);
   });
+
+  async function seedStock(qty: number) {
+    const location = await createTestLocation();
+    const product = await createTestProduct();
+    const admin = await createTestUser({ role: ROLES.admin });
+    const [stock] = await db
+      .insert(Stock)
+      .values({ location_id: location!.id, productId: product!.id, tenant_id: admin!.tenant_id, qty })
+      .returning();
+    return { location, product, admin, stock, caller: callerFor(admin!, admin!.tenant_id) };
+  }
+
+  it('set mode writes the absolute qty and logs the computed delta as COUNT_ADJUSTMENT', async () => {
+    const { product, stock, caller } = await seedStock(15);
+
+    const result = await caller.stock.adjust({
+      stock_id: stock!.id,
+      mode: 'set',
+      target_qty: 12,
+      reason_code: 'PHYSICAL_COUNT',
+    });
+
+    expect(result).toMatchObject({ mode: 'set', reason_code: 'PHYSICAL_COUNT', old_qty: 15, new_qty: 12, change: -3 });
+
+    const [updated] = await db.select().from(Stock).where(eq(Stock.id, stock!.id));
+    expect(updated?.qty).toBe(12);
+
+    const [movement] = await db.select().from(StockMovement).where(eq(StockMovement.product_id, product!.id));
+    expect(movement!.change_qty).toBe(-3);
+    expect(movement!.movement_type).toBe('COUNT_ADJUSTMENT');
+    expect(movement!.reason_code).toBe('PHYSICAL_COUNT');
+  });
+
+  it('set mode can zero out stock', async () => {
+    const { stock, caller } = await seedStock(7);
+    const result = await caller.stock.adjust({
+      stock_id: stock!.id,
+      mode: 'set',
+      target_qty: 0,
+      reason_code: 'DAMAGED',
+    });
+    expect(result).toMatchObject({ old_qty: 7, new_qty: 0, change: -7 });
+    const [updated] = await db.select().from(Stock).where(eq(Stock.id, stock!.id));
+    expect(updated?.qty).toBe(0);
+  });
+
+  it('requires a note when the reason is Other; accepts one when given', async () => {
+    const { stock, caller } = await seedStock(10);
+
+    await expect(
+      caller.stock.adjust({ stock_id: stock!.id, mode: 'set', target_qty: 8, reason_code: 'OTHER' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    const result = await caller.stock.adjust({
+      stock_id: stock!.id,
+      mode: 'set',
+      target_qty: 8,
+      reason_code: 'OTHER',
+      note: 'recount after spill cleanup',
+    });
+    expect(result.new_qty).toBe(8);
+  });
+
+  it('accepts the legacy shape (change_qty + reason, no mode / reason_code)', async () => {
+    const { product, stock, caller } = await seedStock(10);
+    const result = await caller.stock.adjust({ stock_id: stock!.id, change_qty: 4, reason: 'legacy client' });
+    expect(result).toMatchObject({ mode: 'delta', reason_code: 'OTHER', new_qty: 14 });
+
+    const [movement] = await db.select().from(StockMovement).where(eq(StockMovement.product_id, product!.id));
+    expect(movement!.movement_type).toBe('ADJUSTMENT');
+    expect(movement!.reason_code).toBe('OTHER');
+    expect(movement!.reason).toBe('legacy client');
+  });
+
+  it('a concurrent set and delta against one row both land coherently — no lost update', async () => {
+    const { stock, caller } = await seedStock(100);
+
+    await Promise.all([
+      caller.stock.adjust({ stock_id: stock!.id, mode: 'set', target_qty: 50, reason_code: 'PHYSICAL_COUNT' }),
+      caller.stock.adjust({ stock_id: stock!.id, mode: 'delta', change_qty: 10, reason_code: 'FOUND' }),
+    ]);
+
+    const [final] = await db.select().from(Stock).where(eq(Stock.id, stock!.id));
+    // Order isn't deterministic, but the row lock guarantees no torn write:
+    // set-then-delta → 60; delta-then-set → 50. Never 100/110/lost.
+    expect([50, 60]).toContain(final?.qty);
+
+    const movements = await db.select().from(StockMovement).where(eq(StockMovement.location_id, stock!.location_id!));
+    expect(movements).toHaveLength(2);
+  });
 });

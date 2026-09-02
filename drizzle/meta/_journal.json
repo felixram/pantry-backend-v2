@@ -533,6 +533,13 @@
       "when": 1788364184311,
       "tag": "0075_slim_senator_kelly",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1788373374441,
+      "tag": "0076_burly_jasper_sitwell",
+      "breakpoints": true
     }
   ]
 }

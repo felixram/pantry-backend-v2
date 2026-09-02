@@ -82,6 +82,7 @@ describe("unit | currency + formatMoney mirrors stay byte-identical", () => {
   const pairs: Array<[string, string]> = [
     ["types/currency.ts", "../v2/src/lib/currency.ts"],
     ["utils/formatMoney.ts", "../v2/src/lib/formatMoney.ts"],
+    ["types/stockAdjustmentReason.ts", "../v2/src/lib/stockAdjustmentReason.ts"],
   ];
 
   for (const [serverRel, clientRel] of pairs) {

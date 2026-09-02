@@ -23,6 +23,12 @@ export const Invoice = pgTable(
     received_at: timestamp("received_at", { withTimezone: true }),
     resend_message_id: text("resend_message_id"),
     resend_email_id: text("resend_email_id"),
+    // Resend's per-attachment id. One inbound email with N attachments
+    // produces N invoice rows sharing resend_email_id but distinct here —
+    // this is also the retry-idempotency key for ingestInvoiceAttachments.
+    // NULL for manual uploads; "__none__" sentinel for an attachment-less
+    // inbound email's single FAILED row.
+    resend_attachment_id: text("resend_attachment_id"),
     original_file_url: text("original_file_url"),
     original_file_name: text("original_file_name"),
     original_file_type: text("original_file_type"),
@@ -63,8 +69,15 @@ export const Invoice = pgTable(
     index().on(t.matched_supplier_id),
     index().on(t.matched_purchase_order_id),
     index().on(t.invoice_number),
-    uniqueIndex("invoice_tenant_email_id_unique")
-      .on(t.tenant_id, t.resend_email_id),
+    // Plain lookup index for "every invoice from this inbound email".
+    index("invoice_tenant_email_id_idx").on(t.tenant_id, t.resend_email_id),
+    // One row per (email, attachment). NULLS DISTINCT (Postgres default)
+    // leaves manual uploads — all three NULL — unconstrained; inbound rows
+    // carry all three, so a re-delivered webhook can't duplicate an
+    // attachment. Replaces the old (tenant_id, resend_email_id) unique
+    // index, which rejected the 2nd+ attachment of a multi-invoice email.
+    uniqueIndex("invoice_tenant_email_attachment_unique")
+      .on(t.tenant_id, t.resend_email_id, t.resend_attachment_id),
     index().on(t.deletedAt),
   ]
 )

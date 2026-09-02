@@ -9,8 +9,11 @@ import { getResendClient } from "../email/resendClient.ts"
 import type { InboundEmailData } from "../../types/invoice.ts"
 
 /**
- * Check if an inbound email has already been processed (by resend_email_id).
- * Uses email_id (always present) instead of message_id (optional).
+ * Whether any invoice already exists for this inbound email (by
+ * resend_email_id). A *signal*, not a gate — ingestInvoiceAttachments is
+ * idempotent per attachment, so a re-delivered webhook resumes and fills
+ * in any attachments that weren't created the first time. Uses email_id
+ * (always present) rather than message_id (optional).
  */
 export async function checkDuplicateEmail(
   emailId: string,
@@ -100,7 +103,9 @@ export async function ingestInvoiceAttachments(params: {
         a.content_type.startsWith("image/")
     ) ?? []
 
-  // No suitable attachments — create a failed invoice record
+  // No suitable attachments — create a single failed invoice record. The
+  // "__none__" sentinel keeps a re-delivered webhook from stacking
+  // duplicate FAILED rows (real attachment ids never look like this).
   if (fileAttachments.length === 0) {
     const [invoice] = await db
       .insert(Invoice)
@@ -113,8 +118,12 @@ export async function ingestInvoiceAttachments(params: {
         received_at: new Date(),
         resend_message_id: messageId,
         resend_email_id: emailId,
+        resend_attachment_id: "__none__",
         status: INVOICE_STATUS.failed,
         processing_error: "No PDF or image attachment found in email",
+      })
+      .onConflictDoNothing({
+        target: [Invoice.tenant_id, Invoice.resend_email_id, Invoice.resend_attachment_id],
       })
       .returning()
 
@@ -122,25 +131,65 @@ export async function ingestInvoiceAttachments(params: {
     return invoiceIds
   }
 
+  // One invoice row per attachment. A multi-page invoice is a single
+  // (multi-page) file = one attachment = one row — pages are never split,
+  // and separate attachments are never merged; the reviewer resolves a
+  // split-across-files invoice, helped by the same-invoice-number nudge.
   for (const attachment of fileAttachments) {
-    const [invoice] = await db
-      .insert(Invoice)
-      .values({
-        tenant_id: tenantId,
-        location_id: locationId,
-        from_email: fromEmail,
-        from_name: fromName,
-        subject,
-        received_at: new Date(),
-        resend_message_id: messageId,
-        resend_email_id: emailId,
-        original_file_name: attachment.filename,
-        original_file_type: attachment.content_type,
-        status: INVOICE_STATUS.pending,
-      })
-      .returning()
+    let invoice: typeof Invoice.$inferSelect | undefined
+    try {
+      ;[invoice] = await db
+        .insert(Invoice)
+        .values({
+          tenant_id: tenantId,
+          location_id: locationId,
+          from_email: fromEmail,
+          from_name: fromName,
+          subject,
+          received_at: new Date(),
+          resend_message_id: messageId,
+          resend_email_id: emailId,
+          resend_attachment_id: attachment.id,
+          original_file_name: attachment.filename,
+          original_file_type: attachment.content_type,
+          status: INVOICE_STATUS.pending,
+        })
+        // Re-delivered webhook / redeploy mid-batch: skip attachments
+        // already ingested, keep going for the rest.
+        .onConflictDoNothing({
+          target: [Invoice.tenant_id, Invoice.resend_email_id, Invoice.resend_attachment_id],
+        })
+        .returning()
+    } catch (err) {
+      // An unexpected insert failure (DB blip) on one attachment must not
+      // abort the others.
+      logger.error(
+        { error: err, emailId, attachmentId: attachment.id },
+        "Failed to create invoice row for attachment"
+      )
+      continue
+    }
 
-    if (!invoice) continue
+    if (!invoice) {
+      // Already ingested on an earlier delivery — surface its id so the
+      // webhook log stays accurate, then leave its processing alone.
+      const existing = await db.query.Invoice.findFirst({
+        where: and(
+          eq(Invoice.tenant_id, tenantId),
+          eq(Invoice.resend_email_id, emailId),
+          eq(Invoice.resend_attachment_id, attachment.id)
+        ),
+        columns: { id: true },
+      })
+      if (existing) {
+        invoiceIds.push(existing.id)
+        logger.info(
+          { emailId, attachmentId: attachment.id, invoiceId: existing.id },
+          "Attachment already ingested — skipping"
+        )
+      }
+      continue
+    }
 
     invoiceIds.push(invoice.id)
 

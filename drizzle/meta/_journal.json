@@ -526,6 +526,13 @@
       "when": 1788293447763,
       "tag": "0074_supreme_pete_wisdom",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1788364184311,
+      "tag": "0075_slim_senator_kelly",
+      "breakpoints": true
     }
   ]
 }

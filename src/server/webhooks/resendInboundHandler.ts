@@ -129,17 +129,24 @@ export async function handleResendInbound(req: Request, res: Response) {
       return res.status(200).json({ success: true, bounced: true })
     }
 
-    // 5. Deduplication check (always uses email_id which is always present)
+    // 5. Note a prior delivery of this email (Svix retry, manual resend).
+    //    Don't bail — ingestInvoiceAttachments is idempotent per
+    //    attachment, so re-running it resumes and creates any attachments
+    //    that weren't ingested the first time (pod restarted mid-batch on a
+    //    multi-invoice email).
     const { duplicate, existingId } = await checkDuplicateEmail(
       email_id,
       resolution.tenantId
     )
     if (duplicate) {
-      return res.json({ success: true, duplicate: true, invoiceId: existingId })
+      logger.info(
+        { emailId: email_id, existingId },
+        "Inbound email seen before — resuming ingestion for any missing attachments"
+      )
     }
 
     // 6. Respond immediately to prevent Svix retries, then process async
-    res.json({ success: true, accepted: true })
+    res.json({ success: true, accepted: true, resumed: duplicate })
 
     // Fire-and-forget: ingest attachments, create invoice records, trigger processing
     ingestInvoiceAttachments({

@@ -92,6 +92,10 @@ export const getCountReviewDetail = adminProcedure
           reviewed_qty: e.reviewed_qty,
           variance: e.counted_qty !== null ? e.counted_qty - expectedInUnit : null,
           unitConversions: conversions,
+          // Should never be true on a session that reached review —
+          // completeSession blocks submission while any entry is partial —
+          // kept here as a visible backstop rather than assumed.
+          is_partial: e.is_partial,
         };
       }),
     };

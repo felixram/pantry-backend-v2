@@ -1,0 +1,1 @@
+ALTER TABLE "inventory_count_entry" ADD COLUMN "is_partial" boolean DEFAULT false NOT NULL;

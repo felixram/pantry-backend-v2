@@ -1,4 +1,4 @@
-import { index, pgTable, real, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, pgTable, real, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { id, createdAt, updatedAt } from "../schemaHelpers.ts";
 import { InventoryCountSession } from "./inventoryCountSession.ts";
 import { Stock } from "./stock.ts";
@@ -30,6 +30,11 @@ export const InventoryCountEntry = pgTable(
     // whatever the product's conversion factor happens to be by then. Same
     // pattern as PurchaseOrderItem.unit_conversion_factor.
     unit_conversion_factor: real("unit_conversion_factor"),
+    // True when the counter has explicitly flagged this item as not fully
+    // counted yet (e.g. counted the shelf, still owes the basement) —
+    // distinct from counted_qty being null (never touched at all, an
+    // accepted skip). Blocks completeSession until resolved.
+    is_partial: boolean("is_partial").notNull().default(false),
     // Manager's adjusted quantity (same unit as counted_qty). Null = accepted as-is.
     reviewed_qty: real("reviewed_qty"),
     // Timestamp of last successful sync from client

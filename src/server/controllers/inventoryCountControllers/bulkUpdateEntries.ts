@@ -16,6 +16,10 @@ export const bulkUpdateEntries = authedMutation
             entry_id: z.string().uuid(),
             counted_qty: z.number().min(0),
             unit: z.string().optional(),
+            // "Not done yet — more to count" for the plain single-number
+            // flow (the area breakdown sets this itself via
+            // syncEntryAreas instead). Omitted = leave as-is.
+            is_partial: z.boolean().optional(),
           }),
         )
         .min(1)
@@ -90,6 +94,7 @@ export const bulkUpdateEntries = authedMutation
             counted_qty: update.counted_qty,
             unit: update.unit ?? undefined,
             unit_conversion_factor: factor,
+            ...(update.is_partial !== undefined ? { is_partial: update.is_partial } : {}),
             last_synced_at: syncedAt,
           })
           .where(eq(InventoryCountEntry.id, update.entry_id));

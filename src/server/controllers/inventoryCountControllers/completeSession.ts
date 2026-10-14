@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { authedMutation } from "../../trpc.ts";
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { InventoryCountSession, INVENTORY_COUNT_STATUS } from "../../../db/schema/inventoryCountSession.ts";
+import { InventoryCountEntry } from "../../../db/schema/inventoryCountEntry.ts";
 import { hasElevatedRole } from "../../../types/user.ts";
 import { applyCountToStock } from "./helpers/applyCountToStock.ts";
 
@@ -37,6 +38,26 @@ export const completeSession = authedMutation
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "This count session is already completed",
+        });
+      }
+
+      // Server-side backstop for the client's own gating: a session can't
+      // complete while any entry is still explicitly flagged "not done yet"
+      // (counted some storage areas, more to come) — distinct from an item
+      // never touched at all, which stays an accepted skip as always.
+      const [partial] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(InventoryCountEntry)
+        .where(
+          and(
+            eq(InventoryCountEntry.session_id, input.session_id),
+            eq(InventoryCountEntry.is_partial, true),
+          ),
+        );
+      if (partial && partial.count > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `${partial.count} item${partial.count === 1 ? "" : "s"} ${partial.count === 1 ? "is" : "are"} still marked as partially counted. Finish counting or mark ${partial.count === 1 ? "it" : "them"} done before completing.`,
         });
       }
 
